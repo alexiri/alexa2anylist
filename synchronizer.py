@@ -118,9 +118,9 @@ class Synchronizer:
 
     def _show_lists(self, title, a, b):
         if isinstance(a, list):
-            self.log.debug(f"{title} Anylist: {sorted(a)}")
+            self.log.debug(f"{title} Anylist: {sorted(a)[:15]}")
         else:
-            self.log.debug(f"{title} Anylist: {sorted([x.name if not x.checked else f'x-{x.name}-' for x in a.items])}")
+            self.log.debug(f"{title} Anylist: {sorted([x.name if not x.checked else f'x-{x.name}-' for x in a.items])[:15]}")
         self.log.debug(f"{title} Alexa: {sorted(b)}")
 
     def _compare_lists(self, a, b):
