@@ -258,7 +258,7 @@ class Synchronizer:
             # Alexa adds items in all lowercase, let's capitalize the first letter to reduce duplicates on Anylist
             s_item = self.standardize_text(item)
             if item != s_item:
-                self.anylist.update_alexa_list_item(item, s_item)
+                self.alexa.update_alexa_list_item(item, s_item)
                 item = s_item
             anylist_item = self._anylist_list.get_item_by_name(item)
             if not anylist_item or anylist_item.checked:
