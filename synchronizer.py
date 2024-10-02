@@ -142,6 +142,10 @@ class Synchronizer:
         #     self.alexa.get_alexa_list()
         # )
 
+    # Match the format of text written in Anylist to reduce duplicate entries
+    def standardize_text(self, text):
+        return text[0].upper() + text[1:]
+
     def _clobber_alexa(self):
         self.log.info("Clobbering Alexa with Anylist")
         # Anylist is the master list, add or delete items from Alexa
@@ -251,6 +255,11 @@ class Synchronizer:
                 self._alexa_list.remove(item.name)
 
         for item in self._journal.get(Synchronizer.JOURNAL_KEY_ALEXA_NEW_ITEMS):
+            # Alexa adds items in all lowercase, let's capitalize the first letter to reduce duplicates on Anylist
+            s_item = self.standardize_text(item)
+            if item != s_item:
+                self.anylist.update_alexa_list_item(item, s_item)
+                item = s_item
             anylist_item = self._anylist_list.get_item_by_name(item)
             if not anylist_item or anylist_item.checked:
                 self.log.debug(f" -> Adding {item} to Anylist")
