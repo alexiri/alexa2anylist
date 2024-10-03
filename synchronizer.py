@@ -111,7 +111,7 @@ class Synchronizer:
             self.log.debug("Journal is clean, nothing to do")
 
         # Supposedly we're in sync now, let's check
-        if not self._compare_lists(self._anylist_list, self._alexa_list):
+        if not self._are_lists_equal(self._anylist_list, self._alexa_list):
             # If we're not, then we have no choice but to treat Anylist as the good list
             self.log.info("Lists are not in sync, clobbering Alexa...")
             self._clobber_alexa()
@@ -123,7 +123,7 @@ class Synchronizer:
             self.log.debug(f"{title} Anylist: {sorted([x.name if not x.checked else f'x-{x.name}-' for x in a.items])[:15]}")
         self.log.debug(f"{title} Alexa: {sorted(b)}")
 
-    def _compare_lists(self, a, b):
+    def _are_lists_equal(self, a, b):
         if isinstance(a, list):
             return sorted(a) == sorted(b)
         else:
@@ -175,6 +175,10 @@ class Synchronizer:
 
         self.log.info("Syncing lists")
         self._anylist_list, self._alexa_list = self._get_fresh_lists()
+
+        if self._are_lists_equal(self._anylist_list, self._alexa_list):
+            self.log.info("Lists are already in sync")
+            return
 
         self._prepare_transaction()
         self._commit_transaction()
