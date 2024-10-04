@@ -57,6 +57,13 @@ def _stop_alexa():
     alexa = None
     alexa_running = False
 
+# Make sure the length of a given string is a multiple of 8.
+# If it isn't, pad it with '=' characters until it is.
+def _pad_string(string):
+    while len(string) % 8 != 0:
+        string += '='
+    return string
+
 
 alexa_running = False
 alexa = None
@@ -84,7 +91,7 @@ instance.login(_get_config_value("amazon_username", "amazon_username"), _get_con
 
 if instance.login_requires_mfa():
     logger.info("Requires MFA")
-    my_token = otp.get_totp(_get_config_value("amazon_mfa_secret", "amazon_mfa_secret"))
+    my_token = otp.get_totp(_pad_string(_get_config_value("amazon_mfa_secret", "amazon_mfa_secret")))
     instance.submit_mfa(my_token)
     if instance.is_authenticated == True:
         logger.info("Code accepted")
