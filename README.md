@@ -22,7 +22,7 @@ Create a config file like called `config.json`, like this one:
 }
 ```
 
-Place it somewhere, like `/data/alexa2anylist` in the example below:
+Place it somewhere, like `/data/alexa2anylist/` in the example below:
 
 Run the container like so:
 
@@ -37,6 +37,11 @@ Run the container like so:
       - TZ=Europe/Madrid
     restart: unless-stopped
 ```
+
+`restart: unless-stopped` is important, as this container *will* crash for various hard-to-avoid reasons. Upon startup, the synchronization
+should continue from where it left off.
+
+The pre-built container is at available on dockerhub: https://hub.docker.com/r/alexiri/alexa2anylist
 
 ## Credits
 
