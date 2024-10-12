@@ -133,7 +133,7 @@ class Synchronizer:
         self.log.info("Getting fresh lists")
         a, b = (
             self.anylist.refresh(),
-            self.alexa.get_alexa_list()
+            self.alexa.get_alexa_list(refresh=False)
         )
         self._show_lists("Fresh", a, b)
         return a, b
