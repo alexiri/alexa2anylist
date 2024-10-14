@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 from selenium import webdriver
+from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -239,11 +241,37 @@ class AlexaShoppingList:
         time.sleep(5)
 
         list_container = self.driver.find_element(By.CLASS_NAME, 'virtual-list')
-        list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
 
         found = []
-        for item in list_items:
-            found.append(item.get_attribute('innerText'))
+        last = None
+        while True:
+            list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
+            print(f"Found {len(list_items)} items: from {list_items[0].get_attribute('innerText')} to {list_items[-1].get_attribute('innerText')}")
+            for item in list_items:
+                # print(f"Found: {item.get_attribute('innerText')} - {item}")
+                if item.get_attribute('innerText') not in found:
+                    found.append(item.get_attribute('innerText'))
+            if last == list_items[-1]:
+                # We've reached the end
+                break
+            last = list_items[-1]
+            print("Scrolling...")
+            self.driver.execute_script("arguments[0].scrollIntoView();", last)
+            # scroll_origin = ScrollOrigin.from_element(last)
+            # ActionChains(self.driver).scroll_from_origin(scroll_origin, 0, 100).perform()
+            time.sleep(1)
+
+        if not refresh:
+            # Now let's scroll back to the top
+            first = None
+            while True:
+                list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
+                if first == list_items[0]:
+                    # We've reached the top
+                    break
+                first = list_items[0]
+                scroll_origin = ScrollOrigin.from_element(first)
+                ActionChains(self.driver).scroll_from_origin(scroll_origin, 0, -1000).perform()
 
         return found
 
