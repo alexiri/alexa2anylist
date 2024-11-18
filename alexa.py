@@ -246,12 +246,13 @@ class AlexaShoppingList:
         last = None
         while True:
             list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
-            print(f"Found {len(list_items)} items: from {list_items[0].get_attribute('innerText')} to {list_items[-1].get_attribute('innerText')}")
+            if list_items:
+                print(f"Found {len(list_items)} items: from {list_items[0].get_attribute('innerText')} to {list_items[-1].get_attribute('innerText')}")
             for item in list_items:
                 # print(f"Found: {item.get_attribute('innerText')} - {item}")
                 if item.get_attribute('innerText') not in found:
                     found.append(item.get_attribute('innerText'))
-            if last == list_items[-1]:
+            if not list_items or last == list_items[-1]:
                 # We've reached the end
                 break
             last = list_items[-1]
