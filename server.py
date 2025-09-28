@@ -85,28 +85,29 @@ if list_anylist is None:
     sys.exit(1)
 
 logger.info("Connecting to Alexa...")
-instance = _start_alexa()
+alexa = _start_alexa()
 logger.info("Logging in...")
-instance.login(_get_config_value("amazon_username", "amazon_username"), _get_config_value("amazon_password", "amazon_password"))
+alexa.login(_get_config_value("amazon_username", "amazon_username"), _get_config_value("amazon_password", "amazon_password"))
 
-if instance.login_requires_mfa():
+if alexa.login_requires_mfa():
     logger.info("Requires MFA")
     my_token = otp.get_totp(_pad_string(_get_config_value("amazon_mfa_secret", "amazon_mfa_secret")))
-    instance.submit_mfa(my_token)
-    if instance.is_authenticated == True:
+    alexa.submit_mfa(my_token)
+    if alexa.is_authenticated == True:
         logger.info("Code accepted")
     else:
         logger.info("Code failed")
 
-if instance.is_authenticated == True:
+if alexa.is_authenticated == True:
     logger.info("Logged in successfully")
 else:
     logger.info("Login failed!!")
     _stop_alexa()
-    anylist.teardown()
+    if anylist is not None:
+        anylist.teardown()
     sys.exit(1)
 
-syncer = Synchronizer(list_anylist, instance, journal_file='journal.json')
+syncer = Synchronizer(list_anylist, alexa, journal_file='journal.json')
 while True:
     try:
         syncer.sync()
