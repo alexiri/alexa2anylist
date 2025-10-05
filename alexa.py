@@ -315,11 +315,11 @@ class AlexaShoppingList:
 
 
     def login(self, email: str, password: str):
-        self._selenium_get("https://www."+self.amazon_url, (By.ID, 'nav-link-accountList'))
-        self._selenium_wait_page_ready()
+        self._selenium_get(f"https://www.{self.amazon_url}", (By.ID, 'nav-link-accountList'))
 
-        self.driver.find_element(By.CSS_SELECTOR, 'a[data-nav-role="signin"]').click()
-        self._selenium_wait_page_ready()
+        signin_url = self.driver.find_element(By.CSS_SELECTOR, 'a[data-nav-role="signin"]').get_attribute("href")
+        print(f" -> Signin URL: {signin_url}")
+        self._selenium_get(signin_url, AlexaShoppingList.LOGIN_SELECTOR)
 
         self.email = email
         self.password = password
