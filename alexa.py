@@ -318,8 +318,7 @@ class AlexaShoppingList:
         self._selenium_get("https://www."+self.amazon_url, (By.ID, 'nav-link-accountList'))
         self._selenium_wait_page_ready()
 
-        account_menu = self.driver.find_element(By.ID, 'nav-link-accountList')
-        account_menu.click()
+        self.driver.find_element(By.CSS_SELECTOR, 'a[data-nav-role="signin"]').click()
         self._selenium_wait_page_ready()
 
         self.email = email

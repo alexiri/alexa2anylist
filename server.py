@@ -93,12 +93,12 @@ if alexa.login_requires_mfa():
     logger.info("Requires MFA")
     my_token = otp.get_totp(_pad_string(_get_config_value("amazon_mfa_secret", "amazon_mfa_secret")))
     alexa.submit_mfa(my_token)
-    if alexa.is_authenticated == True:
+    if alexa.is_authenticated:
         logger.info("Code accepted")
     else:
         logger.info("Code failed")
 
-if alexa.is_authenticated == True:
+if alexa.is_authenticated:
     logger.info("Logged in successfully")
 else:
     logger.info("Login failed!!")
