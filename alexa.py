@@ -79,11 +79,10 @@ class AlexaShoppingList:
 
 
     def get_screenshot(self, caption = None):
-        return
         # We just need this for debugging purposes
         if hasattr(self, "driver") and os.path.exists("/out"):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S.%f")
-            if caption != None:
+            if caption is not None:
                 caption = caption.replace(" ", "_").replace("/", "_").replace("\\", "_")
                 timestamp += f"_{caption}"
             screenshot_path = f"/out/{timestamp}_screenshot.png"

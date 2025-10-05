@@ -122,4 +122,5 @@ anylist.teardown()
 
 # Original Alexa list: ['Garbanzos 3.5kg', 'Alubia pinta 4kg']
 
-# ~/anylist> podman build alexa2anylist/ -t alexa2anylist && podman run --rm -it -v ./config/:/config/ -v /etc/timezone:/etc/timezone:ro -v /etc/localtime:/etc/localtime:ro alexa2anylist
+# ~/alexa2anylist [main|✚ 2 …4]> rm config/anylist-credentials.json config/cookies.json -f
+# ~/alexa2anylist [main|✚ 1 …4]> podman build . -t alexa2anylist && podman run --rm -it -v ./config/:/config/ -v /etc/timezone:/etc/timezone:ro -v /etc/localtime:/etc/localtime:ro -v /tmp/out:/out alexa2anylist
