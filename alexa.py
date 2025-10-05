@@ -161,12 +161,15 @@ class AlexaShoppingList:
 
 
     def _driver_is_on_login_email_page(self):
-        if not 'ap/signin' in self.driver.current_url:
+        if 'ap/signin' not in self.driver.current_url:
             return False
 
         if len(self.driver.find_elements(*AlexaShoppingList.LOGIN_SELECTOR)) == 0:
+            print(" -> No email field found")
+            self.get_screenshot("no_email_field")
             return False
 
+        print(" -> Email field found")
         return True
 
 
@@ -180,6 +183,7 @@ class AlexaShoppingList:
     def _driver_is_on_login_password_page(self):
         if len(self.driver.find_elements(*AlexaShoppingList.PASSWORD_SELECTOR)) == 0:
             print(" -> No password field found")
+            self.get_screenshot("no_password_field")
             return False
 
         print(" -> Password field found")
@@ -188,7 +192,7 @@ class AlexaShoppingList:
 
     def _handle_login_password_page(self):
         print(" -> Password page detected")
-        self.get_screenshot("password_page_before")
+        # self.get_screenshot("password_page_before")
 
         WebDriverWait(self.driver, 15).until(
             EC.element_to_be_clickable(AlexaShoppingList.PASSWORD_SELECTOR)
@@ -292,7 +296,7 @@ class AlexaShoppingList:
 
 
     def login_requires_mfa(self):
-        if not 'ap/mfa' in self.driver.current_url:
+        if 'ap/mfa' not in self.driver.current_url:
             return False
         return True
 
@@ -306,35 +310,41 @@ class AlexaShoppingList:
         self.driver.find_element(*AlexaShoppingList.SUBMIT_SELECTOR).click()
 
         time.sleep(5)
-        if self.login_requires_mfa() == False:
+        if not self.login_requires_mfa():
             self._login_successful()
-
-
-    def _handle_login(self):
-        if self._driver_is_on_login_email_page():
-            self._handle_login_email_page()
-
-        if self._driver_is_on_login_password_page():
-            self._handle_login_password_page()
 
 
     def login(self, email: str, password: str):
         self._selenium_get("https://www."+self.amazon_url, (By.ID, 'nav-link-accountList'))
+        self._selenium_wait_page_ready()
 
         account_menu = self.driver.find_element(By.ID, 'nav-link-accountList')
         account_menu.click()
+        self._selenium_wait_page_ready()
 
         self.email = email
         self.password = password
 
-        self._handle_login()
+        if self._driver_is_on_login_email_page():
+            self._handle_login_email_page()
+        else:
+            print(" -> Not on login email page")
+            self.get_screenshot("not_on_email_page")
+            return
+
+        if self._driver_is_on_login_password_page():
+            self._handle_login_password_page()
+        else:
+            print(" -> Not on login password page")
+            self.get_screenshot("not_on_password_page")
+            return
 
         self.email = ""
         self.password = ""
 
         #time.sleep(5)
         self._selenium_wait_page_ready()
-        if self.login_requires_mfa() == False:
+        if not self.login_requires_mfa():
             if len(self.driver.find_elements(By.CLASS_NAME, 'nav-link-accountList')) > 0:
                 self._login_successful()
             else:
@@ -354,7 +364,7 @@ class AlexaShoppingList:
         if len(self.driver.find_elements(By.CLASS_NAME, 'nav-action-signin-button')) > 0:
             return True
 
-        if self.is_authenticated == False:
+        if not self.is_authenticated:
             return True
 
         return False
