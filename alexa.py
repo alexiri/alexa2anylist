@@ -413,6 +413,8 @@ class AlexaShoppingList:
             first = None
             while True:
                 list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
+                if not list_items:
+                    return []
                 if first == list_items[0]:
                     # We've reached the top
                     break
