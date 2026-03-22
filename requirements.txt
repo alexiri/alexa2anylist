@@ -1,5 +1,5 @@
 selenium==4.41.0
-websockets==13.0.1
+websockets==13.1
 requests
 websocket-client
 protobuf
