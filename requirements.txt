@@ -1,4 +1,4 @@
-selenium==4.41.0
+selenium==4.43.0
 websockets==16.0
 requests
 websocket-client
