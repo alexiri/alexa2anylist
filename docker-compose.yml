@@ -1,0 +1,9 @@
+services:
+  alexa2anylist:
+    image: mikekmiller/alexa2anylist:latest
+    volumes:
+      - ./config:/config
+      - ./screenshots:/screenshots
+    environment:
+      - TZ=America/Phoenix
+    restart: unless-stopped
