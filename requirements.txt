@@ -1,4 +1,4 @@
-selenium==4.45.0
+cloakbrowser
 websockets==16.0
 requests
 websocket-client

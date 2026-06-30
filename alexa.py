@@ -1,325 +1,221 @@
 #!/usr/bin/env python3
 
-from selenium import webdriver
-from selenium.webdriver import ActionChains
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import ElementClickInterceptedException, StaleElementReferenceException
-import time
 import json
 import os
+import time
 from datetime import datetime
+from playwright.sync_api import TimeoutError as PWTimeoutError
 import logging
 
-WAIT_TIMEOUT=30
+WAIT_TIMEOUT = 30000  # milliseconds
+
+logger = logging.getLogger(__name__)
+
 
 class AlexaShoppingList:
-
-    LOGIN_SELECTOR    = (By.CSS_SELECTOR, 'input[type="email"]')
-    PASSWORD_SELECTOR = (By.CSS_SELECTOR, 'input[type="password"]')
-    SUBMIT_SELECTOR   = (By.CSS_SELECTOR, 'input[type="submit"]')
 
     def __init__(self, amazon_url: str = "amazon.co.uk", cookies_path: str = ""):
         self.amazon_url = amazon_url
         self.cookies_path = cookies_path
-        self._setup_driver()
+        self.is_authenticated = False
+        self._setup_browser()
 
+    def _setup_browser(self):
+        from cloakbrowser import launch
 
-    # def __del__(self):
-    #     self._clear_driver()
+        headed = os.environ.get("HEADED", "0") == "1"
+        self._browser = launch(headless=not headed)
+        self._context = self._browser.new_context(viewport={"width": 1366, "height": 768})
+        self._page = self._context.new_page()
+
+        self._page.goto(f"https://www.{self.amazon_url}", wait_until="domcontentloaded")
+        self._load_cookies()
+
+        if self._page.locator('.nav-action-signin-button').count() == 0:
+            self.is_authenticated = True
 
     # ============================================================
     # Helpers
 
-
     def _get_file_location(self):
         return os.path.dirname(os.path.realpath(__file__))
 
-    # ============================================================
-    # Selenium
-
-
-    def _setup_driver(self):
-        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("window-size=1366,768")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument(f"--user-agent={user_agent}")
-
-        chrome_options.set_capability("goog:loggingPrefs", {"browser": "ALL"})
-
-        driver_path = os.environ.get("CHROME_DRIVER", "")
-        if driver_path != "":
-            service = webdriver.ChromeService(executable_path=driver_path)
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-        else:
-            self.driver = webdriver.Chrome(options=chrome_options)
-
-        self.is_authenticated = False
-        self._selenium_get("https://www."+self.amazon_url, (By.TAG_NAME, 'body'))
-        self._load_cookies()
-
-        if len(self.driver.find_elements(By.ID, 'nav-backup-backup')) > 0:
-            self.driver.find_element(By.CLASS_NAME, "nav-bb-right").find_element(By.LINK_TEXT, "Your Account").click()
-            time.sleep(5)
-
-        if len(self.driver.find_elements(By.CLASS_NAME, 'nav-action-signin-button')) > 0:
-            self.driver.find_element(By.ID, 'nav-link-accountList').click()
-            self._selenium_wait_element(AlexaShoppingList.LOGIN_SELECTOR)
-        else:
-            self.is_authenticated = True
-
-
-    def get_screenshot(self, caption = None):
-        # We just need this for debugging purposes
-        if hasattr(self, "driver") and os.path.exists("/out"):
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S.%f")
-            if caption is not None:
-                caption = caption.replace(" ", "_").replace("/", "_").replace("\\", "_")
-                timestamp += f"_{caption}"
-            screenshot_path = f"/out/{timestamp}_screenshot.png"
-            self.driver.get_screenshot_as_file(screenshot_path)
-
-            html = self.driver.execute_script("return document.body.innerHTML;")
-            with open(f"/out/{timestamp}_content.html","w") as f:
-                f.write(html)
-
-            print(f"Saved screenshot to {screenshot_path}")
-            return screenshot_path
-        return None
-
-    def _clear_driver(self):
-        if hasattr(self, "driver"):
-            self._save_session()
-            self.driver.close()
-
-
-    def _selenium_wait_element(self, element: tuple):
-        try:
-            WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.presence_of_element_located(element))
-        except Exception as e:
-            print(f"Error occurred while waiting for element {element}: {e}")
-            self.get_screenshot()
-            raise e
-
-    def _selenium_wait_page_ready(self):
-        try:
-            WebDriverWait(self.driver, WAIT_TIMEOUT).until(
-                lambda d: d.execute_script('return document.readyState') == 'complete'
-            )
-        except Exception as e:
-            print(f"Error occurred while waiting for page to be ready: {e}")
-            self.get_screenshot()
-            raise e
-
-    def _selenium_get(self, url: str, wait_for_element: tuple=None, wait_for_page_load: bool=False):
-        self.driver.get(url)
-
-        if wait_for_element != None:
-            self._selenium_wait_element(wait_for_element)
-
-        if wait_for_page_load:
-            self._selenium_wait_page_ready()
-
-
     def _cookie_cache_path(self):
-        if self.cookies_path != "":
-            return os.path.join(self.cookies_path, "cookies.json")
-        return os.path.join(self._get_file_location(), "cookies.json")
-
+        base = self.cookies_path if self.cookies_path else self._get_file_location()
+        return os.path.join(base, "cookies.json")
 
     def _save_session(self):
-        return
         if self.is_authenticated:
-            with open(self._cookie_cache_path(), 'w') as file:
-                json.dump(self.driver.get_cookies(), file)
-
+            cookies = self._context.cookies()
+            with open(self._cookie_cache_path(), "w") as f:
+                json.dump(cookies, f)
 
     def _load_cookies(self):
-        if os.path.exists(self._cookie_cache_path()):
+        path = self._cookie_cache_path()
+        if not os.path.exists(path):
+            return
+        with open(path, "r") as f:
+            cookies = json.load(f)
+        self._context.add_cookies(cookies)
+        self._page.goto(f"https://www.{self.amazon_url}", wait_until="domcontentloaded")
+        try:
+            self._page.wait_for_selector('#nav-link-accountList', timeout=WAIT_TIMEOUT)
+        except PWTimeoutError:
+            pass
 
-            with open(self._cookie_cache_path(), 'r') as file:
-                cookies = json.load(file)
+    def _clear_driver(self):
+        self._save_session()
+        self._context.close()
+        self._browser.close()
 
-            for cookie in cookies:
-                self.driver.add_cookie(cookie)
+    # ============================================================
+    # Screenshots (errors only)
 
-            self.driver.refresh()
-            self._selenium_wait_element((By.ID, 'nav-link-accountList'))
-
+    def get_screenshot(self, caption=None):
+        out_dir = os.environ.get("SCREENSHOT_PATH", "/screenshots" if os.name != "nt" else "")
+        if not out_dir:
+            out_dir = os.path.join(self._get_file_location(), "screenshots")
+        os.makedirs(out_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S.%f")
+        if caption:
+            caption = caption.replace(" ", "_").replace("/", "_").replace("\\", "_")
+            timestamp += f"_{caption}"
+        screenshot_path = os.path.join(out_dir, f"{timestamp}_screenshot.png")
+        self._page.screenshot(path=screenshot_path, full_page=True)
+        with open(os.path.join(out_dir, f"{timestamp}_content.html"), "w", encoding="utf-8") as f:
+            f.write(self._page.content())
+        print(f"Saved screenshot to {screenshot_path}")
+        return screenshot_path
 
     # ============================================================
     # Authentication
 
-
     def _driver_is_on_login_email_page(self):
-        if 'ap/signin' not in self.driver.current_url:
+        if "ap/signin" not in self._page.url:
             return False
-
-        if len(self.driver.find_elements(*AlexaShoppingList.LOGIN_SELECTOR)) == 0:
+        if self._page.locator('input[type="email"]').count() == 0:
             print(" -> No email field found")
             self.get_screenshot("no_email_field")
             return False
-
         print(" -> Email field found")
         return True
 
-
     def _handle_login_email_page(self):
-        self.driver.find_element(*AlexaShoppingList.LOGIN_SELECTOR).send_keys(self.email)
-        self.get_screenshot()
-        self.driver.find_element(*AlexaShoppingList.LOGIN_SELECTOR).send_keys(Keys.RETURN)
-        self._selenium_wait_page_ready()
-
+        self._page.fill('input[type="email"]', self.email)
+        self._page.press('input[type="email"]', "Enter")
+        self._page.wait_for_load_state("domcontentloaded")
 
     def _driver_is_on_login_password_page(self):
-        if len(self.driver.find_elements(*AlexaShoppingList.PASSWORD_SELECTOR)) == 0:
+        if self._page.locator('input[type="password"]').count() == 0:
             print(" -> No password field found")
             self.get_screenshot("no_password_field")
             return False
-
         print(" -> Password field found")
         return True
 
-
     def _handle_login_password_page(self):
         print(" -> Password page detected")
-        # self.get_screenshot("password_page_before")
+        pw_field = self._page.locator('input[type="password"]')
+        pw_field.wait_for(state="visible", timeout=15000)
 
-        WebDriverWait(self.driver, 15).until(
-            EC.element_to_be_clickable(AlexaShoppingList.PASSWORD_SELECTOR)
-        )
-        password_field = self.driver.find_element(*AlexaShoppingList.PASSWORD_SELECTOR)
+        # Type with human-like delay
+        pw_field.click()
+        pw_field.fill("")
+        self._page.keyboard.type(self.password, delay=40)
 
-        # 1. Try genuine typing first (Amazon sometimes checks typing events)
-        password_field.clear()
-        typed = False
-        try:
-            for ch in self.password:
-                password_field.send_keys(ch)
-                time.sleep(0.04)  # slight human-like delay
-            if password_field.get_attribute("value"):
-                typed = True
-                print(" -> send_keys typing succeeded")
-        except Exception as e:
-            print(f" -> send_keys failed: {e}")
-
-        # 2. Fallback to JS injection with proper events if typing failed
-        if not typed or password_field.get_attribute("value") == "":
-            print(" -> Falling back to JS value injection")
-            self.driver.execute_script("""
-                const el = arguments[0];
-                el.focus();
-                el.value = '';
-                el.dispatchEvent(new Event('input', {bubbles:true}));
-                el.value = arguments[1];
-                el.dispatchEvent(new Event('input', {bubbles:true}));
-                el.dispatchEvent(new Event('change', {bubbles:true}));
-            """, password_field, self.password)
-
-        val_len = len(password_field.get_attribute("value") or "")
+        val_len = len(pw_field.input_value() or "")
         print(f" -> Password length in field: {val_len}")
-        self.get_screenshot("password_filled")
 
-        # 3. Locate submit (your generic selector retained)
-        try:
-            submit_btn = self.driver.find_element(*AlexaShoppingList.SUBMIT_SELECTOR)
-        except Exception as e:
-            print(f" -> Cannot find submit button: {e}")
+        # Prefer the primary sign-in button by ID, fall back to first submit
+        submit = self._page.locator('#signInSubmit')
+        if submit.count() == 0:
+            submit = self._page.locator('input[type="submit"]').first
+        if submit.count() == 0:
+            print(" -> Cannot find submit button")
             self.get_screenshot("no_submit_button")
             return
 
-        print(f" -> Submit button attrs: id={submit_btn.get_attribute('id')} "
-              f"name={submit_btn.get_attribute('name')} value={submit_btn.get_attribute('value')} "
-              f"disabled={submit_btn.get_attribute('disabled')} aria-disabled={submit_btn.get_attribute('aria-disabled')}")
+        submit.click()
 
-        def post_submit_condition(d):
-            # Success if password field gone OR MFA present OR URL changed away from signin
-            still_on_signin = 'ap/signin' in d.current_url
-            has_password = len(d.find_elements(*AlexaShoppingList.PASSWORD_SELECTOR)) > 0
-            mfa = 'ap/mfa' in d.current_url or len(d.find_elements(By.ID, 'auth-mfa-otpcode')) > 0
-            nav_account = len(d.find_elements(By.ID, 'nav-link-accountList')) > 0 and not still_on_signin
-            return mfa or nav_account or (still_on_signin is False and has_password is False) or (has_password is False)
-
-        attempts = [
-            ("js_click", lambda: self.driver.execute_script("arguments[0].click();", submit_btn)),
-            ("form_submit", lambda: self.driver.execute_script("arguments[0].closest('form').submit();", submit_btn)),
-            ("native_click", lambda: submit_btn.click()),
-            ("scroll_then_click", lambda: (self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", submit_btn), submit_btn.click())),
-            ("action_chains_click", lambda: ActionChains(self.driver).move_to_element(submit_btn).click().perform()),
-        ]
-
-        success = False
-        for label, action in attempts:
-            print(f" -> Attempting submit via: {label}")
-            try:
-                action()
-            except (ElementClickInterceptedException, StaleElementReferenceException) as e:
-                print(f"    {label} exception: {e}")
-                try:
-                    submit_btn = self.driver.find_element(*AlexaShoppingList.SUBMIT_SELECTOR)
-                except Exception:
-                    pass
-            except Exception as e:
-                print(f"    {label} generic exception: {e}")
-
-            self.get_screenshot(f"after_{label}")
-            try:
-                WebDriverWait(self.driver, 8).until(post_submit_condition)
-                success = True
-                print(f" -> Submission recognized after {label}")
-                break
-            except Exception:
-                print(f" -> No state change after {label}")
-                # Re-acquire button if still present
-                try:
-                    submit_btn = self.driver.find_element(*AlexaShoppingList.SUBMIT_SELECTOR)
-                except Exception:
-                    pass
-
-        if not success:
-            print(" -> All submit strategies failed; still on password page")
+        # Wait for any terminal state
+        try:
+            self._page.wait_for_function("""() => {
+                const url = window.location.href;
+                const body = document.body;
+                if (!body) return false;
+                const hasPw = !!document.querySelector('input[type="password"]');
+                const mfa = url.includes('ap/mfa') || !!document.getElementById('auth-mfa-otpcode');
+                const nav = !!document.getElementById('nav-link-accountList') && !url.includes('ap/signin');
+                const puzzle = body.innerText.includes('Solve this puzzle');
+                const wrongPw = body.innerText.includes('password is incorrect');
+                return mfa || nav || puzzle || wrongPw || !hasPw;
+            }""", timeout=15000)
+        except PWTimeoutError:
+            print(" -> No state change after submit")
             self.get_screenshot("password_submit_failed")
-        else:
-            # Give a short grace period for any redirect chain
-            time.sleep(2)
-            self.get_screenshot("post_password_flow")
-            print(" -> Password submission flow appears complete")
+            return
 
+        if self._page.locator("text=password is incorrect").count() > 0:
+            print(" -> ERROR: Amazon says the password is incorrect. Check config.json.")
+            self.get_screenshot("wrong_password")
+            return
+
+        if self.login_requires_puzzle():
+            self.wait_for_puzzle_completion()
+
+        print(" -> Password submission flow appears complete")
+
+    def login_requires_puzzle(self):
+        return self._page.locator("text=Solve this puzzle to protect your account").count() > 0
+
+    def wait_for_puzzle_completion(self):
+        print(" -> CAPTCHA puzzle detected. Please solve it in the browser window.")
+        print(" -> Waiting up to 5 minutes for you to complete the puzzle...")
+        try:
+            self._page.wait_for_function(
+                "() => !document.body.innerText.includes('Solve this puzzle to protect your account')",
+                timeout=300000
+            )
+            print(" -> Puzzle appears solved, continuing...")
+            self._page.wait_for_load_state("domcontentloaded")
+        except PWTimeoutError:
+            print(" -> Timed out waiting for puzzle completion")
+            raise
 
     def login_requires_mfa(self):
-        if 'ap/mfa' not in self.driver.current_url:
-            return False
-        return True
-
+        return "ap/mfa" in self._page.url
 
     def submit_mfa(self, code: str):
         print(f" -> Submitting MFA code: {code}")
-        self.driver.find_element(By.ID, 'auth-mfa-otpcode').send_keys(code)
-        self.driver.find_element(By.ID, 'auth-mfa-remember-device').click()
-        self.get_screenshot("mfa_filled")
-        # self.driver.find_element(By.ID, 'auth-signin-button').click()
-        self.driver.find_element(*AlexaShoppingList.SUBMIT_SELECTOR).click()
-
+        self._page.fill("#auth-mfa-otpcode", code)
+        self._page.locator("#auth-mfa-remember-device").click()
+        self._page.locator('input[type="submit"]').click()
         time.sleep(5)
         if not self.login_requires_mfa():
             self._login_successful()
 
-
     def login(self, email: str, password: str):
-        self._selenium_get(f"https://www.{self.amazon_url}", (By.ID, 'nav-link-accountList'))
+        # Navigate to homepage only if not already there
+        home = f"https://www.{self.amazon_url}"
+        if not self._page.url.startswith(home):
+            self._page.goto(home, wait_until="domcontentloaded")
+        self._page.wait_for_selector('#nav-link-accountList', timeout=WAIT_TIMEOUT)
 
-        signin_url = self.driver.find_element(By.CSS_SELECTOR, 'a[data-nav-role="signin"]').get_attribute("href")
+        signin_url = self._page.get_attribute('a[data-nav-role="signin"]', "href")
+        if not signin_url:
+            print(" -> Could not find sign-in link on homepage")
+            self.get_screenshot("no_signin_link")
+            return
         print(f" -> Signin URL: {signin_url}")
-        self._selenium_get(signin_url, AlexaShoppingList.LOGIN_SELECTOR)
+        self._page.goto(signin_url, wait_until="domcontentloaded")
+
+        # If cookies were valid, Amazon may skip sign-in entirely
+        if "ap/signin" not in self._page.url and "ap/mfa" not in self._page.url:
+            print(" -> Already authenticated via cookies")
+            self._login_successful()
+            return
+
+        self._page.wait_for_selector('input[type="email"]', timeout=WAIT_TIMEOUT)
 
         self.email = email
         self.password = password
@@ -341,145 +237,130 @@ class AlexaShoppingList:
         self.email = ""
         self.password = ""
 
-        #time.sleep(5)
-        self._selenium_wait_page_ready()
+        self._page.wait_for_load_state("domcontentloaded")
         if not self.login_requires_mfa():
-            if len(self.driver.find_elements(By.CLASS_NAME, 'nav-link-accountList')) > 0:
+            if "ap/signin" not in self._page.url and "ap/mfa" not in self._page.url:
                 self._login_successful()
             else:
                 print(" -> Login failed")
-                self.get_screenshot()
-
+                self.get_screenshot("login_failed")
 
     def _login_successful(self):
         self.is_authenticated = True
         self._save_session()
 
-
     def requires_login(self):
-        if 'ap/signin' in self.driver.current_url:
+        if "ap/signin" in self._page.url:
             return True
-
-        if len(self.driver.find_elements(By.CLASS_NAME, 'nav-action-signin-button')) > 0:
+        if self._page.locator('.nav-action-signin-button').count() > 0:
             return True
-
         if not self.is_authenticated:
             return True
-
         return False
 
     # ============================================================
     # Alexa lists
 
-
-    def _ensure_driver_is_on_alexa_list(self, refresh: bool = False):
-        list_url = "https://www."+self.amazon_url+"/alexaquantum/sp/alexaShoppingList?ref=nav_asl"
-        if self.driver.current_url != list_url:
-            self._selenium_get(list_url, (By.CLASS_NAME, 'list-header'))
-        elif refresh == True:
-            self.driver.refresh()
-            self._selenium_wait_element((By.CLASS_NAME, 'list-header'))
-
+    def _ensure_on_alexa_list(self, refresh: bool = False):
+        list_url = f"https://www.{self.amazon_url}/alexaquantum/sp/alexaShoppingList?ref=nav_asl"
+        if self._page.url != list_url:
+            self._page.goto(list_url, wait_until="domcontentloaded")
+            try:
+                self._page.wait_for_selector('.list-header', timeout=WAIT_TIMEOUT)
+            except PWTimeoutError:
+                self.get_screenshot("alexa_list_load_failed")
+                raise
+        elif refresh:
+            self._page.reload(wait_until="domcontentloaded")
+            self._page.wait_for_selector('.list-header', timeout=WAIT_TIMEOUT)
 
     def get_alexa_list(self, refresh: bool = True):
-        self._ensure_driver_is_on_alexa_list(refresh)
+        self._ensure_on_alexa_list(refresh)
         time.sleep(5)
-        self.get_screenshot("alexa_list")
-
-        list_container = self.driver.find_element(By.CLASS_NAME, 'virtual-list')
 
         found = []
-        last = None
+        last_text = None
         while True:
-            list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
-            if list_items:
-                print(f"Found {len(list_items)} items: from {list_items[0].get_attribute('innerText')} to {list_items[-1].get_attribute('innerText')}")
-            for item in list_items:
-                # print(f"Found: {item.get_attribute('innerText')} - {item}")
-                if item.get_attribute('innerText') not in found:
-                    found.append(item.get_attribute('innerText'))
-            if not list_items or last == list_items[-1]:
-                # We've reached the end
+            items = self._page.locator('.virtual-list .item-title').all()
+            texts = [el.inner_text() for el in items]
+            if texts:
+                print(f"Found {len(texts)} items: from {texts[0]} to {texts[-1]}")
+            for t in texts:
+                if t not in found:
+                    found.append(t)
+            if not texts or texts[-1] == last_text:
                 break
-            last = list_items[-1]
+            last_text = texts[-1]
             print("Scrolling...")
-            self.driver.execute_script("arguments[0].scrollIntoView();", last)
-            # scroll_origin = ScrollOrigin.from_element(last)
-            # ActionChains(self.driver).scroll_from_origin(scroll_origin, 0, 100).perform()
+            items[-1].scroll_into_view_if_needed()
             time.sleep(1)
 
         if not refresh:
-            # Now let's scroll back to the top
-            first = None
+            # Scroll back to top
+            first_text = None
             while True:
-                list_items = list_container.find_elements(By.CLASS_NAME, 'item-title')
-                if not list_items:
+                items = self._page.locator('.virtual-list .item-title').all()
+                if not items:
                     return []
-                if first == list_items[0]:
-                    # We've reached the top
+                t = items[0].inner_text()
+                if t == first_text:
                     break
-                first = list_items[0]
-                scroll_origin = ScrollOrigin.from_element(first)
-                ActionChains(self.driver).scroll_from_origin(scroll_origin, 0, -1000).perform()
+                first_text = t
+                self._page.mouse.wheel(0, -1000)
+                time.sleep(0.5)
 
         return found
 
-
     def _get_alexa_list_item_element(self, item: str):
-        self._ensure_driver_is_on_alexa_list(False)
+        self._ensure_on_alexa_list(False)
         time.sleep(5)
-        list_container = self.driver.find_element(By.CLASS_NAME, 'virtual-list')
 
-        for container in list_container.find_elements(By.CLASS_NAME, 'inner'):
-            if container.find_element(By.CLASS_NAME, 'item-title').get_attribute('innerText') == item:
-                return container
-        return None
-
+        last_text = None
+        while True:
+            containers = self._page.locator('.virtual-list .inner').all()
+            for container in containers:
+                if container.locator('.item-title').inner_text() == item:
+                    return container
+            if not containers:
+                return None
+            texts = [c.locator('.item-title').inner_text() for c in containers]
+            if texts[-1] == last_text:
+                return None
+            last_text = texts[-1]
+            containers[-1].scroll_into_view_if_needed()
+            time.sleep(1)
 
     def add_alexa_list_item(self, item: str):
-        element = self._get_alexa_list_item_element(item)
-        if element != None:
+        if self._get_alexa_list_item_element(item) is not None:
             return
 
-        self.driver.find_element(By.CLASS_NAME, 'list-header').find_element(By.CLASS_NAME, 'add-symbol').click()
-
-        textfield = self.driver.find_element(By.CLASS_NAME, 'list-header').find_element(By.CLASS_NAME, 'input-box').find_element(By.TAG_NAME, 'input')
-        textfield.send_keys(item)
-
-        submit = self.driver.find_element(By.CLASS_NAME, 'list-header').find_element(By.CLASS_NAME, 'add-to-list').find_element(By.TAG_NAME, 'button')
-        submit.click()
-
-        self.driver.find_element(By.CLASS_NAME, 'list-header').find_element(By.CLASS_NAME, 'cancel-input').click()
+        self._page.locator('.list-header .add-symbol').click()
+        self._page.locator('.list-header .input-box input').fill(item)
+        self._page.locator('.list-header .add-to-list button').click()
+        self._page.locator('.list-header .cancel-input').click()
         time.sleep(1)
 
         return self.get_alexa_list(False)
-
 
     def update_alexa_list_item(self, old: str, new: str):
         element = self._get_alexa_list_item_element(old)
-        if element == None:
+        if element is None:
             return
 
-        element.find_element(By.CLASS_NAME, 'item-actions-1').find_element(By.TAG_NAME, 'button').click()
-
-        textfield = element.find_element(By.CLASS_NAME, 'input-box').find_element(By.TAG_NAME, 'input')
-        textfield.clear()
-        textfield.send_keys(new)
-
-        element.find_element(By.CLASS_NAME, 'item-actions-2').find_element(By.TAG_NAME, 'button').click()
+        element.locator('.item-actions-1 button').click()
+        field = element.locator('.input-box input')
+        field.fill(new)
+        element.locator('.item-actions-2 button').click()
         time.sleep(1)
 
         return self.get_alexa_list(False)
-
 
     def remove_alexa_list_item(self, item: str):
         element = self._get_alexa_list_item_element(item)
-        if element == None:
+        if element is None:
             return
 
-        element.find_element(By.CLASS_NAME, 'item-actions-2').find_element(By.TAG_NAME, 'button').click()
+        element.locator('.item-actions-2 button').click()
         time.sleep(1)
 
         return self.get_alexa_list(False)
-
-    # ============================================================

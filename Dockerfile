@@ -1,28 +1,44 @@
-FROM alpine:3.24
+FROM python:3.12-slim
 
 VOLUME /config
 RUN mkdir /server
 
 ENV CONFIG_PATH="/config/"
-ENV CHROME_DRIVER="/usr/bin/chromedriver"
 
-RUN echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" > /etc/apk/repositories
-RUN echo "http://dl-cdn.alpinelinux.org/alpine/edge/main" >> /etc/apk/repositories
-RUN apk update
-
-RUN apk add chromium
-RUN apk add chromium-chromedriver
-RUN apk add python3
-RUN apk add py3-pip
-RUN apk add protoc
-
-RUN rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    protobuf-compiler \
+    libglib2.0-0 \
+    libgobject-2.0-0 \
+    libnspr4 \
+    libnss3 \
+    libdbus-1-3 \
+    libcups2 \
+    libexpat1 \
+    libxcb1 \
+    libxkbcommon0 \
+    libatspi2.0-0 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libx11-6 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libcairo2 \
+    libpango-1.0-0 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /requirements.txt
-RUN pip3 install --break-system-packages -r /requirements.txt
+RUN pip3 install -r /requirements.txt
+
+# Pre-download CloakBrowser binary so containers start instantly
+RUN python3 -c "from cloakbrowser.download import ensure_binary; ensure_binary()"
 
 COPY pcov.proto /pcov.proto
-RUN /usr/bin/protoc --proto_path=/ --python_out=/server pcov.proto
+RUN protoc --proto_path=/ --python_out=/server pcov.proto
 COPY *.py /server/
 
 ENTRYPOINT ["python3","/server/server.py"]

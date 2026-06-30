@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import sys
@@ -52,7 +53,7 @@ def _stop_alexa():
     global alexa_running
 
     if alexa_running == True:
-        del alexa
+        alexa._clear_driver()
 
     alexa = None
     alexa_running = False
@@ -65,11 +66,19 @@ def _pad_string(string):
     return string
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--once", action="store_true", help="Sync once and exit")
+args = parser.parse_args()
+
 alexa_running = False
 alexa = None
 global config
 config = _load_config()
+run_once = args.once or _get_config_value("run_once", False)
 
+_anylist_cred_cache = os.path.join(_config_path(), 'anylist-credentials.json')
+if os.path.exists(_anylist_cred_cache):
+    os.remove(_anylist_cred_cache)
 
 anylist = AnyList(
     email=_get_config_value("anylist_username", "anylist_username"),
@@ -111,10 +120,11 @@ syncer = Synchronizer(list_anylist, alexa, journal_file='journal.json')
 while True:
     try:
         syncer.sync()
-        sleep(10)
     except Exception as e:
         logger.error(e, exc_info=True)
+    if run_once:
         break
+    sleep(10)
 
 _stop_alexa()
 anylist.teardown()
