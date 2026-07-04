@@ -1,0 +1,10 @@
+services:
+  alexa2anylist:
+    image: alexiri/alexa2anylist:latest
+    volumes:
+      - /data/alexa2anylist:/config
+      - /data/screenshots:/screenshots
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Europe/Madrid
+    restart: unless-stopped
