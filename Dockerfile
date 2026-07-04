@@ -29,6 +29,12 @@ RUN apt-get update && apt-get install -y \
     libcairo2 \
     libpango-1.0-0 \
     libasound2 \
+    fonts-noto-color-emoji \
+    fonts-freefont-ttf \
+    fonts-unifont \
+    fonts-ipafont-gothic \
+    fonts-wqy-zenhei \
+    fonts-tlwg-loma-otf \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /requirements.txt
