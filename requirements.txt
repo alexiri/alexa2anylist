@@ -1,5 +1,5 @@
 cloakbrowser
-websockets==16.0
+websockets==16.1
 requests
 websocket-client
 protobuf
