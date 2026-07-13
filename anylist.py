@@ -322,7 +322,7 @@ class List:
         })
 
     def refresh(self):
-        # self._api.get_lists(refresh_cache=True)
+        self._api.get_lists(refresh_cache=True)
         return self._api.get_list_by_id(self.identifier)
 
     def get_item_by_id(self, identifier):
@@ -470,6 +470,24 @@ class Item:
         self._manualSortIndex = item_data.manualSortIndex
 
         self._fieldsToUpdate = []
+        self._original_values = {}
+
+    def _track_update(self, field, current_value):
+        if field not in self._original_values:
+            self._original_values[field] = current_value
+        if field not in self._fieldsToUpdate:
+            self._fieldsToUpdate.append(field)
+
+    def _rollback_updates(self):
+        for field, value in self._original_values.items():
+            setattr(self, f'_{field}', value)
+
+        self._fieldsToUpdate.clear()
+        self._original_values.clear()
+
+    def _commit_updates(self):
+        self._fieldsToUpdate.clear()
+        self._original_values.clear()
 
     @classmethod
     def from_name(cls, lst, name):
@@ -522,9 +540,10 @@ class Item:
 
                 if response.status_code != 200:
                     # Ok, now we're really screwed
+                    self._rollback_updates()
                     raise Exception(f"Failed to update item: {response.text}")
 
-            self._fieldsToUpdate.clear()
+            self._commit_updates()
             self.log.debug(f"Updated item {self} in list {self._listId}")
             return True
 
@@ -545,8 +564,8 @@ class Item:
     @listId.setter
     def listId(self, value):
         if not self._listId:
+            self._track_update('listId', self._listId)
             self._listId = value
-            self._fieldsToUpdate.append('listId')
         elif self._listId != value:
             raise Exception("Cannot change listId")
 
@@ -557,8 +576,8 @@ class Item:
     @name.setter
     def name(self, value):
         if self._name != value:
+            self._track_update('name', self._name)
             self._name = value
-            self._fieldsToUpdate.append('name')
 
     @property
     def quantity(self):
@@ -567,8 +586,8 @@ class Item:
     @quantity.setter
     def quantity(self, value):
         if self._quantity != value:
+            self._track_update('quantity', self._quantity)
             self._quantity = value
-            self._fieldsToUpdate.append('quantity')
 
     @property
     def details(self):
@@ -577,8 +596,8 @@ class Item:
     @details.setter
     def details(self, value):
         if self._details != value:
+            self._track_update('details', self._details)
             self._details = value
-            self._fieldsToUpdate.append('details')
 
     @property
     def checked(self):
@@ -590,8 +609,8 @@ class Item:
             raise Exception("Checked must be a boolean")
 
         if self._checked != value:
+            self._track_update('checked', self._checked)
             self._checked = value
-            self._fieldsToUpdate.append('checked')
 
     @property
     def category(self):
@@ -600,8 +619,8 @@ class Item:
     @category.setter
     def category(self, value):
         if self._category != value:
+            self._track_update('category', self._category)
             self._category = value
-            self._fieldsToUpdate.append('category')
 
     @property
     def userId(self):
@@ -618,8 +637,8 @@ class Item:
     @categoryMatchId.setter
     def categoryMatchId(self, value):
         if self._categoryMatchId != value:
+            self._track_update('categoryMatchId', self._categoryMatchId)
             self._categoryMatchId = value
-            self._fieldsToUpdate.append('categoryMatchId')
 
     @property
     def manualSortIndex(self):
@@ -631,8 +650,8 @@ class Item:
             raise Exception("ManualSortIndex must be an integer")
 
         if self._manualSortIndex != value:
+            self._track_update('manualSortIndex', self._manualSortIndex)
             self._manualSortIndex = value
-            self._fieldsToUpdate.append('manualSortIndex')
 
     def asPB(self):
         item = pcov_pb2.ListItem()
