@@ -145,6 +145,7 @@ def main(max_cycles=None, retry_delay=10, sync_delay=10):
                 break
             sleep(sync_delay)
         except Exception as e:
+            cycle_count += 1
             logger.error(e, exc_info=True)
             if anylist is not None:
                 anylist.teardown()
