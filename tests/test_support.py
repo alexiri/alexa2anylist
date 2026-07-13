@@ -182,3 +182,120 @@ def install_runtime_stubs() -> None:
 
         onetimepass.get_totp = get_totp
         sys.modules["onetimepass"] = onetimepass
+
+    if "playwright.sync_api" not in sys.modules:
+        playwright = types.ModuleType("playwright")
+        sync_api = types.ModuleType("playwright.sync_api")
+
+        class TimeoutError(Exception):
+            pass
+
+        sync_api.TimeoutError = TimeoutError
+        playwright.sync_api = sync_api
+        sys.modules["playwright"] = playwright
+        sys.modules["playwright.sync_api"] = sync_api
+
+    if "cloakbrowser" not in sys.modules:
+        cloakbrowser = types.ModuleType("cloakbrowser")
+
+        class _FakeLocator:
+            def count(self):
+                return 0
+
+            def wait_for(self, *args, **kwargs):
+                return None
+
+            def fill(self, *args, **kwargs):
+                return None
+
+            def press(self, *args, **kwargs):
+                return None
+
+            def first(self):
+                return self
+
+            def all(self):
+                return []
+
+            def click(self):
+                return None
+
+            def inner_text(self):
+                return ""
+
+            def scroll_into_view_if_needed(self):
+                return None
+
+        class _FakePage:
+            def __init__(self):
+                self.url = "https://www.amazon.co.uk"
+                self.mouse = types.SimpleNamespace(wheel=lambda *args, **kwargs: None)
+
+            def goto(self, *args, **kwargs):
+                return None
+
+            def locator(self, *args, **kwargs):
+                return _FakeLocator()
+
+            def wait_for_selector(self, *args, **kwargs):
+                return None
+
+            def reload(self, *args, **kwargs):
+                return None
+
+            def wait_for_load_state(self, *args, **kwargs):
+                return None
+
+            def get_attribute(self, *args, **kwargs):
+                return "https://www.amazon.co.uk/ap/signin"
+
+            def expect_response(self, *args, **kwargs):
+                class _Ctx:
+                    def __enter__(self_inner):
+                        return None
+
+                    def __exit__(self_inner, exc_type, exc, tb):
+                        return False
+
+                return _Ctx()
+
+            def wait_for_function(self, *args, **kwargs):
+                return None
+
+            def evaluate(self, *args, **kwargs):
+                return ""
+
+            def screenshot(self, *args, **kwargs):
+                return None
+
+            def content(self):
+                return ""
+
+        class _FakeContext:
+            def __init__(self):
+                self._page = _FakePage()
+
+            def new_page(self):
+                return self._page
+
+            def cookies(self):
+                return []
+
+            def add_cookies(self, *args, **kwargs):
+                return None
+
+            def close(self):
+                return None
+
+        class _FakeBrowser:
+            def new_context(self, *args, **kwargs):
+                return _FakeContext()
+
+            def close(self):
+                return None
+
+        def launch(*args, **kwargs):
+            return _FakeBrowser()
+
+        cloakbrowser.launch = launch
+        sys.modules["cloakbrowser"] = cloakbrowser

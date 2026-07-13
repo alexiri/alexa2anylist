@@ -34,14 +34,24 @@ class AnyList:
         self.access_token = None
         self.refresh_token = None
         self.lists = []
-        self._old_lists = []
         self.last_updated = None
-        self.changes_added = {}
-        self.changes_modified = {}
-        self.changes_deleted = {}
         self._user_data = None
+        self.recent_items = {}
         self.ws = None
+        self._ws_thread = None
         self.ws_connected = False
+        self._state_lock = threading.RLock()
+
+    def _sanitize_response_text(self, text, max_length=240):
+        sanitized = (text or '').replace('\n', ' ').replace('\r', ' ').strip()
+        if len(sanitized) > max_length:
+            return f"{sanitized[:max_length]}..."
+        return sanitized
+
+    def _write_private_json(self, file_path, payload):
+        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as file:
+            json.dump(payload, file)
 
     def login(self):
         if not self._load_credentials():
@@ -78,14 +88,16 @@ class AnyList:
             "CONFIG_PATH",
             os.path.dirname(os.path.realpath(__file__))
         )
-        with open(os.path.join(config_path, self.credentials_cache), 'w') as file:
-            json.dump({
+        self._write_private_json(
+            os.path.join(config_path, self.credentials_cache),
+            {
                 AnyList.CREDENTIALS_KEY_CLIENT_ID: self.client_id,
                 AnyList.CREDENTIALS_KEY_ACCESS_TOKEN: self.access_token,
                 AnyList.CREDENTIALS_KEY_REFRESH_TOKEN: self.refresh_token,
                 AnyList.CREDENTIALS_LAST_UPDATED: time.time(),
                 AnyList.CREDENTIALS_LAST_UPDATED_METHOD: method,
-            }, file)
+            },
+        )
 
         return True
 
@@ -97,7 +109,7 @@ class AnyList:
             'X-AnyLeaf-API-Version': '3',
         })
         if response.status_code != 200:
-            raise Exception(f"Failed to fetch tokens: {response.text}")
+            raise Exception(f"Failed to fetch tokens: {self._sanitize_response_text(response.text)}")
 
         result = response.json()
         self.access_token = result['access_token']
@@ -113,7 +125,7 @@ class AnyList:
         })
 
         if response.status_code != 200:
-            self.log.warning(f"Failed to refresh tokens: {response.text}")
+            self.log.warning(f"Failed to refresh tokens: {self._sanitize_response_text(response.text)}")
             self.log.warning("Attempting to fetch new tokens using credentials")
             return self._fetch_tokens()
 
@@ -122,10 +134,34 @@ class AnyList:
         self.refresh_token = result['refresh_token']
         self._save_credentials(method = 'refresh')
         self.log.info("Refreshed tokens")
-        if not self.ws_connected:
-            self._setup_websocket()
+        self._setup_websocket(force_reconnect=True)
 
-    def _setup_websocket(self):
+    def _close_websocket(self):
+        with self._state_lock:
+            ws = self.ws
+            ws_thread = self._ws_thread
+            self.ws = None
+            self._ws_thread = None
+            self.ws_connected = False
+
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+        if ws_thread and ws_thread.is_alive() and ws_thread is not threading.current_thread():
+            ws_thread.join(timeout=2)
+
+    def _setup_websocket(self, force_reconnect=False):
+        with self._state_lock:
+            if self.ws is not None and self.ws_connected and not force_reconnect:
+                return
+            has_existing_ws = self.ws is not None
+
+        if force_reconnect or has_existing_ws:
+            self._close_websocket()
+
         def on_message(ws, message):
             if message == '--heartbeat--':
                 # Ignore heartbeats
@@ -138,17 +174,21 @@ class AnyList:
 
         def on_error(ws, error):
             self.log.error(f"WebSocket error: {error}")
+            with self._state_lock:
+                self.ws_connected = False
             self._refresh_tokens()
 
         def on_close(ws, close_status_code, close_msg):
-            self.ws_connected = False
+            with self._state_lock:
+                self.ws_connected = False
             if close_status_code or close_msg:
                 self.log.info(f"WebSocket closed: {close_status_code} {close_msg}")
             else:
                 self.log.info("WebSocket closed")
 
         def on_open(ws):
-            self.ws_connected = True
+            with self._state_lock:
+                self.ws_connected = True
             self.log.info("WebSocket connection opened")
 
             # def send_heartbeat():
@@ -171,7 +211,7 @@ class AnyList:
         # def on_pong(ws, data):
         #     self.log.debug(f"Received pong: {data}")
 
-        self.ws = websocket.WebSocketApp(
+        ws = websocket.WebSocketApp(
             f'wss://{AnyList.ANYLIST_API}/data/add-user-listener',
             header={
                 'Authorization': f'Bearer {self.access_token}',
@@ -185,15 +225,17 @@ class AnyList:
             on_ping=on_ping,
             # on_pong=on_pong,
         )
-        wst = threading.Thread(
-            target=self.ws.run_forever,
+        ws_thread = threading.Thread(
+            target=ws.run_forever,
             kwargs={'ping_interval': 5, 'ping_payload': '--heartbeat--'},)
-        wst.daemon = True
-        wst.start()
+        ws_thread.daemon = True
+        with self._state_lock:
+            self.ws = ws
+            self._ws_thread = ws_thread
+        ws_thread.start()
 
     def teardown(self):
-        # Close the websocket connection
-        self.ws.close()
+        self._close_websocket()
 
     def _post(self, path, data = {}, files = {}, headers = {}):
         def _request():
@@ -210,75 +252,48 @@ class AnyList:
 
         response = _request()
         if response.status_code != 200:
-            self.log.warning(f"Failed to send request, will retry: {response.text}")
+            self.log.warning(f"Failed to send request, will retry: {self._sanitize_response_text(response.text)}")
             # Try refreshing the tokens and try again
             self._refresh_tokens()
             time.sleep(5)
             response = _request()
             if response.status_code != 200:
-                raise Exception(f"Failed to send request: {response.text}")
+                raise Exception(f"Failed to send request: {self._sanitize_response_text(response.text)}")
 
         return response
 
 
     def _get_user_data(self, refresh_cache=False):
-        if self._user_data and not refresh_cache:
-            return self._user_data
+        with self._state_lock:
+            if self._user_data and not refresh_cache:
+                return self._user_data
 
         response = self._post('/data/user-data/get')
-        if response.status_code != 200:
-            raise Exception(f"Failed to get user data: {response.text}")
 
-        self._user_data = pcov_pb2.PBUserDataResponse()
-        self._user_data.ParseFromString(response.content)
-        self.last_updated = time.time()
-        return self._user_data
+        user_data = pcov_pb2.PBUserDataResponse()
+        user_data.ParseFromString(response.content)
+        with self._state_lock:
+            self._user_data = user_data
+            self.last_updated = time.time()
+            return self._user_data
 
     def get_lists(self, refresh_cache=False):
-        if self.lists and not refresh_cache:
-            return self.lists
-
-        # Only update the old lists if the last update was more than a second ago
-        # Sometimes updates are sent in quick succession, so we don't want to overwrite the old lists
-        # because we'll miss changes.
-        if self.last_updated and time.time() - self.last_updated > 1:
-            self._old_lists = self.lists
+        with self._state_lock:
+            if self.lists and not refresh_cache:
+                return self.lists
 
         self._get_user_data(refresh_cache)
-        self.lists = [List(self, l) for l in self._user_data.shoppingListsResponse.newLists]
-
-        self.changes_added = {}
-        self.changes_modified = {}
-        self.changes_deleted = {}
-        if self._old_lists:
-            for lst in self.lists:
-                for i in lst.items:
-                    old = next((l for l in self._old_lists if l.identifier == lst.identifier), None)
-                    if not old or i not in old:
-                        if not lst.identifier in self.changes_added:
-                            self.changes_added[lst.identifier] = []
-                        self.changes_added[lst.identifier].append(i)
-                        # self.log.debug(f"Added item {i} to list {lst}")
-                    elif i != old.get_item_by_id(i.identifier):
-                        if not lst.identifier in self.changes_modified:
-                            self.changes_modified[lst.identifier] = []
-                        self.changes_modified[lst.identifier].append(i)
-                        # self.log.debug(f"Modified item {i} in list {lst}")
-            for lst in self._old_lists:
-                for i in lst.items:
-                    if i not in self.get_list_by_id(lst.identifier):
-                        if not lst.identifier in self.changes_deleted:
-                            self.changes_deleted[lst.identifier] = []
-                        self.changes_deleted[lst.identifier].append(i)
-                        # self.log.debug(f"Deleted item {i} from list {lst}")
-
-        return self.lists
+        with self._state_lock:
+            self.lists = [List(self, l) for l in self._user_data.shoppingListsResponse.newLists]
+            return self.lists
 
     def get_list_by_id(self, identifier):
-        return next((lst for lst in self.lists if lst.identifier == identifier), None)
+        with self._state_lock:
+            return next((lst for lst in self.lists if lst.identifier == identifier), None)
 
     def get_list_by_name(self, name):
-        return next((lst for lst in self.lists if lst.name == name), None)
+        with self._state_lock:
+            return next((lst for lst in self.lists if lst.name == name), None)
 
     def get_recent_items_by_list_id(self, list_id):
         return self.recent_items.get(list_id, [])
@@ -323,7 +338,10 @@ class List:
 
     def refresh(self):
         self._api.get_lists(refresh_cache=True)
-        return self._api.get_list_by_id(self.identifier)
+        refreshed = self._api.get_list_by_id(self.identifier)
+        if refreshed is None:
+            raise Exception(f"Failed to refresh list {self.identifier}: list not found after reload")
+        return refreshed
 
     def get_item_by_id(self, identifier):
         return next((i for i in self.items if i.identifier == identifier), None)
@@ -356,7 +374,7 @@ class List:
         response = self._execute(ops)
 
         if response.status_code != 200:
-            raise Exception(f"Failed to add item: {response.text}")
+            raise Exception(f"Failed to add item: {self._api._sanitize_response_text(response.text)}")
 
         self.items.append(item)
         self.log.debug(f"Added item {item} to list {self}")
@@ -382,7 +400,7 @@ class List:
         response = self._execute(ops)
 
         if response.status_code != 200:
-            raise Exception(f"Failed to remove item: {response.text}")
+            raise Exception(f"Failed to remove item: {self._api._sanitize_response_text(response.text)}")
 
         self.items.remove(item)
         self.log.debug(f"Removed item {item} from list {self}")
@@ -437,7 +455,7 @@ class List:
         response = self._execute(ops)
 
         if response.status_code != 200:
-            raise Exception(f"Failed to uncheck all items: {response.text}")
+            raise Exception(f"Failed to uncheck all items: {self._api._sanitize_response_text(response.text)}")
 
         self.log.debug(f"Unchecked all items in list {self}")
 
@@ -532,7 +550,7 @@ class Item:
             response = self._list._execute(ops)
 
             if response.status_code != 200:
-                self.log.warning(f"Failed to update item first time: {response.text}")
+                self.log.warning(f"Failed to update item first time: {self._list._api._sanitize_response_text(response.text)}")
                 # Reauthenticate and try again
                 self._list._api._refresh_tokens()
 
@@ -541,7 +559,7 @@ class Item:
                 if response.status_code != 200:
                     # Ok, now we're really screwed
                     self._rollback_updates()
-                    raise Exception(f"Failed to update item: {response.text}")
+                    raise Exception(f"Failed to update item: {self._list._api._sanitize_response_text(response.text)}")
 
             self._commit_updates()
             self.log.debug(f"Updated item {self} in list {self._listId}")

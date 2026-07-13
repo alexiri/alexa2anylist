@@ -44,11 +44,15 @@ class AlexaShoppingList:
         base = self.cookies_path if self.cookies_path else self._get_file_location()
         return os.path.join(base, "cookies.json")
 
+    def _write_private_json(self, file_path, payload):
+        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as file:
+            json.dump(payload, file)
+
     def _save_session(self):
         if self.is_authenticated:
             cookies = self._context.cookies()
-            with open(self._cookie_cache_path(), "w") as f:
-                json.dump(cookies, f)
+            self._write_private_json(self._cookie_cache_path(), cookies)
 
     def _load_cookies(self):
         path = self._cookie_cache_path()
@@ -447,7 +451,7 @@ class AlexaShoppingList:
 
     def add_alexa_list_item(self, item: str):
         if self._get_alexa_list_item_element(item) is not None:
-            return
+            return self.get_alexa_list(False)
 
         self._page.locator('.list-header .add-symbol').click()
         self._page.locator('.list-header .input-box input').fill(item)
@@ -460,7 +464,7 @@ class AlexaShoppingList:
     def update_alexa_list_item(self, old: str, new: str):
         element = self._get_alexa_list_item_element(old)
         if element is None:
-            return
+            return None
 
         element.locator('.item-actions-1 button').click()
         field = element.locator('.input-box input')
@@ -473,7 +477,7 @@ class AlexaShoppingList:
     def remove_alexa_list_item(self, item: str):
         element = self._get_alexa_list_item_element(item)
         if element is None:
-            return
+            return None
 
         element.locator('.item-actions-2 button').click()
         time.sleep(1)
