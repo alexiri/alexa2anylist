@@ -196,17 +196,17 @@ class AnyList:
         self.ws.close()
 
     def _post(self, path, data = {}, files = {}, headers = {}):
-        headers = {
-            'Authorization': f'Bearer {self.access_token}',
-            'X-AnyLeaf-Client-Identifier': self.client_id,
-            'X-AnyLeaf-API-Version': '3',
-        } | headers
-
         def _request():
-            if files:
-                return requests.post(f'https://{AnyList.ANYLIST_API}{path}', files=files, headers=headers)
+            request_headers = {
+                'Authorization': f'Bearer {self.access_token}',
+                'X-AnyLeaf-Client-Identifier': self.client_id,
+                'X-AnyLeaf-API-Version': '3',
+            } | headers
 
-            return requests.post(f'https://{AnyList.ANYLIST_API}{path}', data=data, headers=headers)
+            if files:
+                return requests.post(f'https://{AnyList.ANYLIST_API}{path}', files=files, headers=request_headers)
+
+            return requests.post(f'https://{AnyList.ANYLIST_API}{path}', data=data, headers=request_headers)
 
         response = _request()
         if response.status_code != 200:
