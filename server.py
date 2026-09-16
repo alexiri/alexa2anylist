@@ -77,10 +77,6 @@ config = {}
 
 
 def _create_syncer():
-    _anylist_cred_cache = os.path.join(_config_path(), 'anylist-credentials.json')
-    if os.path.exists(_anylist_cred_cache):
-        os.remove(_anylist_cred_cache)
-
     anylist = AnyList(
         email=_get_config_value("anylist_username", "anylist_username"),
         password=_get_config_value("anylist_password", "anylist_password"),
@@ -135,10 +131,10 @@ def main(max_cycles=None, retry_delay=10, sync_delay=10):
         if max_cycles is not None and cycle_count >= max_cycles:
             break
 
-        if syncer is None or anylist is None:
-            anylist, syncer = _create_syncer()
-
         try:
+            if syncer is None or anylist is None:
+                anylist, syncer = _create_syncer()
+
             syncer.sync()
             cycle_count += 1
             if run_once:

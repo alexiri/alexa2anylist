@@ -1,5 +1,6 @@
 services:
   alexa2anylist:
+    build: .
     image: alexiri/alexa2anylist:latest
     volumes:
       - /data/alexa2anylist:/config

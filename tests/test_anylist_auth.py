@@ -12,6 +12,7 @@ from tests.test_support import install_runtime_stubs
 
 install_runtime_stubs()
 
+import anylist as anylist_module
 from anylist import AnyList
 from anylist import Item
 from anylist import List
@@ -95,6 +96,16 @@ class AnyListAuthRetryTests(unittest.TestCase):
         self.assertIn("response_bytes=0", log_output)
         self.assertIn("CF-RAY", log_output)
         self.assertNotIn("password", log_output)
+
+    def test_load_credentials_logs_missing_cache_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("anylist.os.environ", {"CONFIG_PATH": tmpdir}):
+                api = AnyList("user@example.com", "password", credential_cache="creds.json")
+                with self.assertLogs("anylist", level="INFO") as logs:
+                    self.assertFalse(api._load_credentials())
+
+        self.assertIn("credential cache not found at", "\n".join(logs.output))
+        self.assertIn("creds.json", "\n".join(logs.output))
 
     @patch("anylist.time.sleep", return_value=None)
     @patch("anylist.requests.post")
@@ -209,9 +220,9 @@ class AnyListAuthRetryTests(unittest.TestCase):
         item = Item(FakeList(), item_data)
         item.checked = False
 
-        with patch("anylist.pcov_pb2.PBListOperationList", _FakeProtoOpList), \
-             patch("anylist.pcov_pb2.PBListOperation", _FakeProtoOp), \
-             patch("anylist.pcov_pb2.PBOperationMetadata", _FakeMetadata):
+        with patch.object(anylist_module.pcov_pb2, "PBListOperationList", _FakeProtoOpList), \
+             patch.object(anylist_module.pcov_pb2, "PBListOperation", _FakeProtoOp), \
+             patch.object(anylist_module.pcov_pb2, "PBOperationMetadata", _FakeMetadata):
             with self.assertRaisesRegex(Exception, "Failed to update item"):
                 item.save()
 
@@ -254,9 +265,9 @@ class AnyListAuthRetryTests(unittest.TestCase):
         item = Item(FakeList(), item_data)
         item.checked = False
 
-        with patch("anylist.pcov_pb2.PBListOperationList", _FakeProtoOpList), \
-             patch("anylist.pcov_pb2.PBListOperation", _FakeProtoOp), \
-             patch("anylist.pcov_pb2.PBOperationMetadata", _FakeMetadata):
+        with patch.object(anylist_module.pcov_pb2, "PBListOperationList", _FakeProtoOpList), \
+             patch.object(anylist_module.pcov_pb2, "PBListOperation", _FakeProtoOp), \
+             patch.object(anylist_module.pcov_pb2, "PBOperationMetadata", _FakeMetadata):
             with self.assertRaisesRegex(Exception, "sanitized"):
                 item.save()
 

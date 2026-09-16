@@ -86,8 +86,10 @@ class AnyList:
             "CONFIG_PATH",
             os.path.dirname(os.path.realpath(__file__))
         )
-        if os.path.exists(os.path.join(config_path, self.credentials_cache)):
-            with open(os.path.join(config_path, self.credentials_cache), 'r') as file:
+        credentials_path = os.path.join(config_path, self.credentials_cache)
+        if os.path.exists(credentials_path):
+            self.log.info("Loading AnyList credential cache from %s", credentials_path)
+            with open(credentials_path, 'r') as file:
                 credentials = json.load(file)
 
             self.client_id = credentials.get(AnyList.CREDENTIALS_KEY_CLIENT_ID, self.client_id)
@@ -96,6 +98,7 @@ class AnyList:
             self.log.info("Loaded credentials from cache")
             return True
 
+        self.log.info("AnyList credential cache not found at %s", credentials_path)
         return False
 
     def _save_credentials(self, method):

@@ -14,6 +14,7 @@ install_runtime_stubs()
 class FakeAnyList:
     instances = 0
     teardown_calls = 0
+    login_calls = 0
 
     def __init__(self, *args, **kwargs):
         FakeAnyList.instances += 1
@@ -21,6 +22,7 @@ class FakeAnyList:
         self.kwargs = kwargs
 
     def login(self):
+        FakeAnyList.login_calls += 1
         return None
 
     def get_list_by_name(self, name):
@@ -58,6 +60,7 @@ class FakeAlexa:
 class FakeSynchronizer:
     instances = 0
     sync_calls = 0
+    fail_first_sync = True
 
     def __init__(self, anylist, alexa, journal_file=None):
         FakeSynchronizer.instances += 1
@@ -67,12 +70,16 @@ class FakeSynchronizer:
 
     def sync(self):
         FakeSynchronizer.sync_calls += 1
-        if FakeSynchronizer.sync_calls == 1:
+        if FakeSynchronizer.fail_first_sync and FakeSynchronizer.sync_calls == 1:
             raise RuntimeError("transient sync failure")
 
 
 class ServerRecoveryTests(unittest.TestCase):
     def setUp(self):
+        self.original_modules = {
+            module_name: sys.modules.get(module_name)
+            for module_name in ("anylist", "alexa", "synchronizer", "server")
+        }
         for module_name in ("anylist", "alexa", "synchronizer", "server"):
             sys.modules.pop(module_name, None)
 
@@ -101,11 +108,19 @@ class ServerRecoveryTests(unittest.TestCase):
 
         FakeAnyList.instances = 0
         FakeAnyList.teardown_calls = 0
+        FakeAnyList.login_calls = 0
         FakeAlexa.instances = 0
         FakeAlexa.login_calls = []
         FakeAlexa.clear_calls = 0
         FakeSynchronizer.instances = 0
         FakeSynchronizer.sync_calls = 0
+        FakeSynchronizer.fail_first_sync = True
+
+    def tearDown(self):
+        for module_name, original_module in self.original_modules.items():
+            sys.modules.pop(module_name, None)
+            if original_module is not None:
+                sys.modules[module_name] = original_module
 
     def test_main_retries_after_sync_exception(self):
         sleep_calls = []
@@ -119,6 +134,27 @@ class ServerRecoveryTests(unittest.TestCase):
 
         self.assertGreaterEqual(FakeSynchronizer.instances, 2, "expected a fresh synchronizer after recovery")
         self.assertGreaterEqual(FakeAlexa.instances, 2, "expected Alexa client recreation after recovery")
+        self.assertIn(0, sleep_calls)
+
+    def test_main_retries_after_anylist_login_exception(self):
+        sleep_calls = []
+        original_login = FakeAnyList.login
+
+        def failing_first_login(self):
+            FakeAnyList.login_calls += 1
+            if FakeAnyList.login_calls == 1:
+                raise RuntimeError("AnyList temporarily unavailable")
+
+        self.server.sleep = lambda seconds: sleep_calls.append(seconds)
+        FakeAnyList.login = failing_first_login
+        FakeSynchronizer.fail_first_sync = False
+        try:
+            self.server.main(max_cycles=2, retry_delay=0, sync_delay=0)
+        finally:
+            FakeAnyList.login = original_login
+
+        self.assertEqual(FakeAnyList.login_calls, 2)
+        self.assertEqual(FakeSynchronizer.sync_calls, 1)
         self.assertIn(0, sleep_calls)
 
 
