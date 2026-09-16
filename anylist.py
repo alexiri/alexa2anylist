@@ -48,6 +48,24 @@ class AnyList:
             return f"{sanitized[:max_length]}..."
         return sanitized
 
+    def _log_failed_response(self, operation, response):
+        response_headers = getattr(response, 'headers', {}) or {}
+        diagnostic_headers = {
+            name: response_headers[name]
+            for name in ('Content-Type', 'Content-Length', 'Server', 'CF-RAY', 'X-Request-ID')
+            if name in response_headers
+        }
+        response_text = getattr(response, 'text', '') or ''
+        self.log.error(
+            "%s failed: status=%s url=%s response_bytes=%d headers=%s body=%r",
+            operation,
+            getattr(response, 'status_code', 'unknown'),
+            getattr(response, 'url', f'https://{AnyList.ANYLIST_API}'),
+            len(response_text),
+            diagnostic_headers,
+            self._sanitize_response_text(response_text),
+        )
+
     def _write_private_json(self, file_path, payload):
         fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, 'w') as file:
@@ -102,14 +120,25 @@ class AnyList:
         return True
 
     def _fetch_tokens(self):
-        response = requests.post(f'https://{AnyList.ANYLIST_API}/auth/token', data={
-            'email': self.email,
-            'password': self.password,
-        }, headers = {
-            'X-AnyLeaf-API-Version': '3',
-        })
+        self.log.info("Requesting AnyList access tokens")
+        try:
+            response = requests.post(f'https://{AnyList.ANYLIST_API}/auth/token', data={
+                'email': self.email,
+                'password': self.password,
+            }, headers = {
+                'X-AnyLeaf-API-Version': '3',
+            })
+        except requests.RequestException:
+            self.log.exception("AnyList token request failed before receiving a response")
+            raise
+
         if response.status_code != 200:
-            raise Exception(f"Failed to fetch tokens: {self._sanitize_response_text(response.text)}")
+            self._log_failed_response("AnyList token request", response)
+            raise Exception(
+                "Failed to fetch tokens: "
+                f"status={response.status_code} "
+                f"body={self._sanitize_response_text(response.text)!r}"
+            )
 
         result = response.json()
         self.access_token = result['access_token']

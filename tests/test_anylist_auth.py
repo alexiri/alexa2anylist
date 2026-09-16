@@ -78,6 +78,24 @@ class _FakeWebSocket:
 
 
 class AnyListAuthRetryTests(unittest.TestCase):
+    @patch("anylist.requests.post")
+    def test_fetch_tokens_logs_empty_error_response_metadata(self, mock_post):
+        response = _Response(status_code=503)
+        response.url = "https://www.anylist.com/auth/token"
+        response.headers = {"Content-Type": "text/html", "CF-RAY": "request-id"}
+        mock_post.return_value = response
+        api = AnyList("user@example.com", "password")
+
+        with self.assertLogs("anylist", level="ERROR") as logs:
+            with self.assertRaisesRegex(Exception, "status=503 body=''"):
+                api._fetch_tokens()
+
+        log_output = "\n".join(logs.output)
+        self.assertIn("status=503", log_output)
+        self.assertIn("response_bytes=0", log_output)
+        self.assertIn("CF-RAY", log_output)
+        self.assertNotIn("password", log_output)
+
     @patch("anylist.time.sleep", return_value=None)
     @patch("anylist.requests.post")
     def test_post_retries_with_refreshed_bearer_token(self, mock_post, _mock_sleep):
