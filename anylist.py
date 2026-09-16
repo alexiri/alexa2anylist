@@ -150,14 +150,22 @@ class AnyList:
         self.log.info("Fetched tokens")
 
     def _refresh_tokens(self):
-        response = requests.post(f'https://{AnyList.ANYLIST_API}/auth/token/refresh', data={
-            'refresh_token': self.refresh_token,
-        }, headers = {
-            'X-AnyLeaf-API-Version': '3',
-        })
+        self.log.info("Refreshing AnyList access tokens")
+        try:
+            response = requests.post(f'https://{AnyList.ANYLIST_API}/auth/token/refresh', data={
+                'refresh_token': self.refresh_token,
+            }, headers = {
+                'X-AnyLeaf-API-Version': '3',
+            })
+        except requests.RequestException:
+            self.log.exception("AnyList token refresh failed before receiving a response")
+            raise
 
         if response.status_code != 200:
-            self.log.warning(f"Failed to refresh tokens: {self._sanitize_response_text(response.text)}")
+            self._log_failed_response("AnyList token refresh", response)
+            if response.status_code not in (401, 403):
+                raise Exception(f"Failed to refresh tokens: status={response.status_code}")
+
             self.log.warning("Attempting to fetch new tokens using credentials")
             return self._fetch_tokens()
 
@@ -208,7 +216,6 @@ class AnyList:
             self.log.error(f"WebSocket error: {error}")
             with self._state_lock:
                 self.ws_connected = False
-            self._refresh_tokens()
 
         def on_close(ws, close_status_code, close_msg):
             with self._state_lock:
@@ -284,13 +291,21 @@ class AnyList:
 
         response = _request()
         if response.status_code != 200:
-            self.log.warning(f"Failed to send request, will retry: {self._sanitize_response_text(response.text)}")
-            # Try refreshing the tokens and try again
+            self._log_failed_response(f"AnyList API request {path}", response)
+            if response.status_code not in (401, 403):
+                raise Exception(f"Failed to send request: status={response.status_code}")
+
+            self.log.warning("Request was unauthorized; refreshing tokens before retry")
             self._refresh_tokens()
             time.sleep(5)
             response = _request()
             if response.status_code != 200:
-                raise Exception(f"Failed to send request: {self._sanitize_response_text(response.text)}")
+                self._log_failed_response(f"AnyList API request retry {path}", response)
+                raise Exception(
+                    "Failed to send request: "
+                    f"status={response.status_code} "
+                    f"body={self._sanitize_response_text(response.text)!r}"
+                )
 
         return response
 

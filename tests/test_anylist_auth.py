@@ -140,6 +140,18 @@ class AnyListAuthRetryTests(unittest.TestCase):
         self.assertEqual(refresh_call.kwargs["data"]["refresh_token"], "refresh-token")
         self.assertEqual(retry_call.kwargs["headers"]["Authorization"], "Bearer fresh-token")
 
+    @patch("anylist.requests.post")
+    def test_post_does_not_refresh_tokens_after_server_error(self, mock_post):
+        mock_post.return_value = _Response(status_code=503)
+        api = AnyList("user@example.com", "password")
+        api._refresh_tokens = unittest.mock.Mock()
+
+        with self.assertRaisesRegex(Exception, "status=503"):
+            api._post("/data/user-data/get")
+
+        api._refresh_tokens.assert_not_called()
+        self.assertEqual(mock_post.call_count, 1)
+
     def test_list_refresh_forces_remote_reload(self):
         calls = []
         refreshed_list = object()
