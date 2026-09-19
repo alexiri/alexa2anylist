@@ -147,11 +147,12 @@ class Synchronizer:
         #     self.alexa.get_alexa_list()
         # )
 
-    # Match the format of text written in Anylist to reduce duplicate entries
+    # Match the format of text written in Anylist to reduce duplicate entries: capitalize
+    # each word, leaving the rest alone so things like "4.5kg" and "iPhone" survive
     def standardize_text(self, text):
         if not text:
             return text
-        return text[0].upper() + text[1:]
+        return " ".join(word[:1].upper() + word[1:] for word in text.split(" "))
 
     def _refresh_baselines(self):
         self._anylist_list, self._alexa_list = self._get_fresh_lists()
@@ -266,7 +267,8 @@ class Synchronizer:
                 # if it's new but checked, we don't care
                 self._journal.add(Synchronizer.JOURNAL_KEY_ANYLIST_NEW_ITEMS, item.identifier)
         for item in self._old_anylist_list:
-            if item not in self._anylist_list:
+            # A crossed-out item was never on Alexa, even if an active one shares its name
+            if item not in self._anylist_list and not item.checked:
                 self._journal.add(Synchronizer.JOURNAL_KEY_ANYLIST_DELETED_ITEMS, item.identifier)
 
         # Now let's see what's changed in Alexa
@@ -339,7 +341,7 @@ class Synchronizer:
                 new_alexa_list = self._require_alexa_item_state(updated_list, item_name, False, 'remove')
 
         for item in self._journal.get(Synchronizer.JOURNAL_KEY_ALEXA_NEW_ITEMS):
-            # Alexa adds items in all lowercase, let's capitalize the first letter to reduce duplicates on Anylist
+            # Alexa adds items in all lowercase, let's capitalize each word to reduce duplicates on Anylist
             s_item = self.standardize_text(item)
             if item != s_item:
                 updated_list = self.alexa.update_alexa_list_item(item, s_item)

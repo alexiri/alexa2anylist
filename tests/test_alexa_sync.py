@@ -262,6 +262,14 @@ class AlexaChangesTest(SyncTestCase):
 
         self.assert_in_sync(["Milk", "Eggs", "Apples"])
 
+    def test_voice_added_item_has_each_word_capitalized(self):
+        self.alexa.add("pan de molde")
+        self.alexa.add("garbanzos 4.5kg")
+
+        self.syncer.sync()
+
+        self.assert_in_sync(["Milk", "Eggs", "Pan De Molde", "Garbanzos 4.5kg"])
+
     def test_item_completed_in_alexa_app_is_checked_in_anylist(self):
         self.alexa.complete("Milk")
 
@@ -328,14 +336,36 @@ class AnyListChangesTest(SyncTestCase):
         self.assert_in_sync(["Oat milk", "Eggs"])
         self.assertEqual(len(self.alexa.items), 2)
 
-    def test_changes_on_both_sides_in_one_sync(self):
-        self.anylist.user_add("Bread")
-        self.anylist.user_set("Eggs", checked=True)
-        self.alexa.add("coffee")
+    def test_deleted_item_is_removed_from_alexa(self):
+        del self.anylist.server[self.anylist._server_item("Milk").identifier]
 
         self.syncer.sync()
 
-        self.assert_in_sync(["Milk", "Bread", "Coffee"])
+        self.assert_in_sync(["Eggs"])
+
+    def test_deleting_crossed_out_copy_leaves_active_item_on_alexa(self):
+        self.anylist.user_add("Milk")
+        self.anylist.user_set("Milk", checked=True)  # the old copy, as _server_item finds it first
+        self.syncer.sync()
+        crossed_out = next(i for i in self.anylist.server.values() if i.name == "Milk" and i.checked)
+        self.alexa.writes.clear()
+
+        # The deletion only reaches the journal when something else changed too
+        del self.anylist.server[crossed_out.identifier]
+        self.alexa.add("Bread")
+        self.syncer.sync()
+
+        self.assert_in_sync(["Eggs", "Milk", "Bread"])
+        self.assertEqual(self.alexa.writes, [])
+
+    def test_changes_on_both_sides_in_one_sync(self):
+        self.anylist.user_add("Bread")
+        self.anylist.user_set("Eggs", checked=True)
+        self.alexa.add("iced coffee")
+
+        self.syncer.sync()
+
+        self.assert_in_sync(["Milk", "Bread", "Iced Coffee"])
 
 
 class FailureTest(SyncTestCase):
