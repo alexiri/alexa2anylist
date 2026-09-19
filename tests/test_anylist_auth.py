@@ -78,7 +78,106 @@ class _FakeWebSocket:
         return None
 
 
+class AnyListLoginThrottleTests(unittest.TestCase):
+    def setUp(self):
+        AnyList._last_login_attempt = None
+        AnyList._login_failures = 0
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        env_patch = patch("anylist.os.environ", {"CONFIG_PATH": self._tmpdir.name})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self.clock = [1000.0]
+        self.sleeps = []
+        time_patch = patch("anylist.time.time", side_effect=lambda: self.clock[0])
+        sleep_patch = patch("anylist.time.sleep", side_effect=self._sleep)
+        time_patch.start()
+        sleep_patch.start()
+        self.addCleanup(time_patch.stop)
+        self.addCleanup(sleep_patch.stop)
+
+    def _sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.clock[0] += seconds
+
+    def _api(self):
+        return AnyList("user@example.com", "password", login_attempt_cache="login.json")
+
+    def _ok(self):
+        return _Response(status_code=200, json_data={"access_token": "a", "refresh_token": "r"})
+
+    @patch("anylist.requests.post")
+    def test_first_login_does_not_wait(self, mock_post):
+        mock_post.return_value = self._ok()
+        self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [])
+
+    @patch("anylist.requests.post")
+    def test_login_waits_30s_after_previous_attempt_across_instances(self, mock_post):
+        mock_post.return_value = self._ok()
+        self._api()._fetch_tokens()
+        self.clock[0] += 5
+        # Simulate a container restart: forget the in-process state
+        AnyList._last_login_attempt = None
+        self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [25])
+
+    @patch("anylist.requests.post")
+    def test_attempt_is_recorded_before_request(self, mock_post):
+        def crash(*args, **kwargs):
+            raise KeyboardInterrupt("container killed")
+        mock_post.side_effect = crash
+        with self.assertRaises(KeyboardInterrupt):
+            self._api()._fetch_tokens()
+        mock_post.side_effect = None
+        mock_post.return_value = self._ok()
+        self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [30])
+
+    @patch("anylist.requests.post")
+    def test_consecutive_failures_back_off_exponentially(self, mock_post):
+        mock_post.return_value = _Response(status_code=503)
+        with self.assertLogs("anylist", level="ERROR"):
+            for _ in range(4):
+                with self.assertRaises(Exception):
+                    self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [60, 120, 240])
+
+        mock_post.return_value = self._ok()
+        self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps[-1], 480)
+        self.clock[0] += 30
+        self._api()._fetch_tokens()
+        self.assertEqual(len(self.sleeps), 4)
+
+    @patch("anylist.requests.post")
+    def test_backoff_is_capped(self, mock_post):
+        mock_post.return_value = self._ok()
+        self._api()._save_login_attempt(self.clock[0], 50)
+        self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [AnyList.LOGIN_MAX_INTERVAL])
+
+    @patch("anylist.requests.post")
+    def test_clock_going_backwards_waits_at_most_one_interval(self, mock_post):
+        mock_post.return_value = self._ok()
+        self._api()._save_login_attempt(self.clock[0] + 86400, 0)
+        self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [30])
+
+    @patch("anylist.requests.post")
+    def test_corrupt_attempt_file_waits_one_interval(self, mock_post):
+        mock_post.return_value = self._ok()
+        Path(self._tmpdir.name, "login.json").write_text("{not json")
+        with self.assertLogs("anylist", level="WARNING"):
+            self._api()._fetch_tokens()
+        self.assertEqual(self.sleeps, [30])
+
+
 class AnyListAuthRetryTests(unittest.TestCase):
+    def setUp(self):
+        AnyList._last_login_attempt = None
+        AnyList._login_failures = 0
+
     @patch("anylist.requests.post")
     def test_fetch_tokens_logs_empty_error_response_metadata(self, mock_post):
         response = _Response(status_code=503)

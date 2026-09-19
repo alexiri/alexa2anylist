@@ -24,12 +24,24 @@ class AnyList:
     CREDENTIALS_LAST_UPDATED_METHOD = 'lastUpdatedMethod'
     ANYLIST_API = 'www.anylist.com'
 
-    def __init__(self, email, password, credential_cache = None):
+    # AnyList's load balancer starts answering /auth/token with empty 503s when
+    # it sees too many logins from one IP, so password logins are throttled.
+    # The last attempt is persisted so the limit survives container restarts.
+    LOGIN_MIN_INTERVAL = 30
+    LOGIN_MAX_INTERVAL = 600
+    LOGIN_ATTEMPT_KEY_TIMESTAMP = 'lastAttempt'
+    LOGIN_ATTEMPT_KEY_FAILURES = 'consecutiveFailures'
+    # Process-wide fallback for when there is no login attempt file
+    _last_login_attempt = None
+    _login_failures = 0
+
+    def __init__(self, email, password, credential_cache = None, login_attempt_cache = None):
         self.log = logging.getLogger(__name__)
         self.log.setLevel(logging.DEBUG)
         self.email = email
         self.password = password
         self.credentials_cache = credential_cache
+        self.login_attempt_cache = login_attempt_cache
         self.client_id = uuid.uuid4().hex
         self.access_token = None
         self.refresh_token = None
@@ -122,7 +134,76 @@ class AnyList:
 
         return True
 
+    def _login_attempt_path(self):
+        if not self.login_attempt_cache:
+            return None
+        config_path = os.environ.get(
+            "CONFIG_PATH",
+            os.path.dirname(os.path.realpath(__file__))
+        )
+        return os.path.join(config_path, self.login_attempt_cache)
+
+    def _load_login_attempt(self):
+        """Returns (last attempt timestamp or None, consecutive failures)."""
+        path = self._login_attempt_path()
+        if path is None:
+            return AnyList._last_login_attempt, AnyList._login_failures
+        if not os.path.exists(path):
+            return None, 0
+
+        try:
+            with open(path, 'r') as file:
+                state = json.load(file)
+            return (
+                float(state[AnyList.LOGIN_ATTEMPT_KEY_TIMESTAMP]),
+                int(state.get(AnyList.LOGIN_ATTEMPT_KEY_FAILURES, 0)),
+            )
+        except Exception:
+            # If we can't tell when the last attempt was, assume it was just now
+            self.log.warning("Unreadable AnyList login attempt file at %s", path, exc_info=True)
+            return time.time(), 0
+
+    def _save_login_attempt(self, timestamp, failures):
+        AnyList._last_login_attempt = timestamp
+        AnyList._login_failures = failures
+        path = self._login_attempt_path()
+        if path is None:
+            return
+
+        # Write atomically so a crash mid-write can't leave a corrupt file behind
+        tmp_path = f"{path}.tmp"
+        self._write_private_json(tmp_path, {
+            AnyList.LOGIN_ATTEMPT_KEY_TIMESTAMP: timestamp,
+            AnyList.LOGIN_ATTEMPT_KEY_FAILURES: failures,
+        })
+        os.replace(tmp_path, path)
+
+    def _wait_for_login_slot(self):
+        """Sleeps until a password login is allowed and records the attempt.
+
+        Returns the number of consecutive failures before this attempt."""
+        last_attempt, failures = self._load_login_attempt()
+        interval = min(
+            AnyList.LOGIN_MIN_INTERVAL * (2 ** min(failures, 10)),
+            AnyList.LOGIN_MAX_INTERVAL,
+        )
+        if last_attempt is not None:
+            # Clamp so a clock that jumped backwards can't make us wait forever
+            wait = min(interval, max(0, last_attempt + interval - time.time()))
+            if wait > 0:
+                self.log.warning(
+                    "Last AnyList login attempt was %.0fs ago (%d consecutive failures); "
+                    "waiting %.0fs before trying again",
+                    time.time() - last_attempt, failures, wait,
+                )
+                time.sleep(wait)
+
+        # Record the attempt before making it, in case we die mid-request
+        self._save_login_attempt(time.time(), failures)
+        return failures
+
     def _fetch_tokens(self):
+        failures = self._wait_for_login_slot()
         self.log.info("Requesting AnyList access tokens")
         try:
             response = requests.post(f'https://{AnyList.ANYLIST_API}/auth/token', data={
@@ -132,10 +213,12 @@ class AnyList:
                 'X-AnyLeaf-API-Version': '3',
             })
         except requests.RequestException:
+            self._save_login_attempt(time.time(), failures + 1)
             self.log.exception("AnyList token request failed before receiving a response")
             raise
 
         if response.status_code != 200:
+            self._save_login_attempt(time.time(), failures + 1)
             self._log_failed_response("AnyList token request", response)
             raise Exception(
                 "Failed to fetch tokens: "
@@ -143,6 +226,7 @@ class AnyList:
                 f"body={self._sanitize_response_text(response.text)!r}"
             )
 
+        self._save_login_attempt(time.time(), 0)
         result = response.json()
         self.access_token = result['access_token']
         self.refresh_token = result['refresh_token']

@@ -81,6 +81,7 @@ def _create_syncer():
         email=_get_config_value("anylist_username", "anylist_username"),
         password=_get_config_value("anylist_password", "anylist_password"),
         credential_cache='anylist-credentials.json',
+        login_attempt_cache='anylist-login-attempt.json',
     )
     anylist.login()
     list_anylist = anylist.get_list_by_name(_get_config_value("anylist_list_name", "anylist_list_name"))
