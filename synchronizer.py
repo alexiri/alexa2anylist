@@ -2,6 +2,13 @@ import logging
 import os
 import json
 import time
+import unicodedata
+
+
+def normalize_name(name):
+    """How item names are compared across lists: ignoring case, accents and extra spaces."""
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return " ".join(plain.lower().split())
 
 class Journal:
 
@@ -39,7 +46,7 @@ class Journal:
         return self._last_update_time
 
     def _load(self):
-        if not self._journal_file:
+        if not self._journal_file or not os.path.exists(self._journal_file):
             return
 
         try:
@@ -162,6 +169,12 @@ class Synchronizer:
     def _seed_baselines(self):
         self._old_anylist_list = self._anylist_list
         self._old_alexa_list = self._alexa_list
+
+    def _find_anylist_item(self, name):
+        # Prefer an active item, then one spelled exactly the same
+        matches = [i for i in self._anylist_list if normalize_name(i.name) == normalize_name(name)]
+        matches.sort(key=lambda i: (bool(i.checked), i.name != name))
+        return matches[0] if matches else None
 
     def _list_get_item_by_id(self, lst, item_id):
         getter = getattr(lst, 'get_item_by_id', None)
@@ -341,21 +354,33 @@ class Synchronizer:
                 new_alexa_list = self._require_alexa_item_state(updated_list, item_name, False, 'remove')
 
         for item in self._journal.get(Synchronizer.JOURNAL_KEY_ALEXA_NEW_ITEMS):
-            # Alexa adds items in all lowercase, let's capitalize each word to reduce duplicates on Anylist
-            s_item = self.standardize_text(item)
-            if item != s_item:
-                updated_list = self.alexa.update_alexa_list_item(item, s_item)
-                updated_list = self._require_alexa_item_state(updated_list, item, False, 'rename')
-                new_alexa_list = self._require_alexa_item_state(updated_list, s_item, True, 'rename')
-                item = s_item
-            anylist_item = self._anylist_list.get_item_by_name(item)
-            if not anylist_item or anylist_item.checked:
-                self.log.debug(f" -> Adding {item} to Anylist")
-                self._anylist_list.add_or_uncheck_item(item)
+            # Reuse what AnyList already has, however Alexa spelled it, so we don't pile up
+            # uncategorized duplicates. Truly new items get each word capitalized, since Alexa
+            # adds them in lowercase.
+            anylist_item = self._find_anylist_item(item)
+            name = anylist_item.name if anylist_item else self.standardize_text(item)
+            # The item may already have been renamed, if we're replaying the journal after a crash
+            if item != name and item in new_alexa_list:
+                if name in new_alexa_list:
+                    self.log.debug(f" -> Removing {item} from Alexa, it's already there as {name}")
+                    updated_list = self.alexa.remove_alexa_list_item(item)
+                    new_alexa_list = self._require_alexa_item_state(updated_list, item, False, 'remove')
+                else:
+                    self.log.debug(f" -> Renaming {item} to {name} in Alexa")
+                    updated_list = self.alexa.update_alexa_list_item(item, name)
+                    updated_list = self._require_alexa_item_state(updated_list, item, False, 'rename')
+                    new_alexa_list = self._require_alexa_item_state(updated_list, name, True, 'rename')
+            if anylist_item is None:
+                self.log.debug(f" -> Adding {name} to Anylist")
+                self._anylist_list.add_item(name)
+            elif anylist_item.checked:
+                self.log.debug(f" -> Unchecking {name} in Anylist")
+                self._anylist_list.uncheck_item(anylist_item)
         for item in self._journal.get(Synchronizer.JOURNAL_KEY_ALEXA_DELETED_ITEMS):
-            if self._anylist_list.get_item_by_name(item):
-                self.log.debug(f" -> Checking {item} in Anylist")
-                self._anylist_list.check_item(item)
+            anylist_item = self._find_anylist_item(item)
+            if anylist_item is not None and not anylist_item.checked:
+                self.log.debug(f" -> Checking {anylist_item.name} in Anylist")
+                self._anylist_list.check_item(anylist_item)
 
         self._journal.reset()
         self._journal.save()

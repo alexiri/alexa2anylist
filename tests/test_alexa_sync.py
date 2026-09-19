@@ -142,24 +142,26 @@ class FakeAnyListList:
     def get_item_by_name(self, name):
         return next((i for i in self.items if i.name == name), None)
 
-    def _set(self, item_name, **changes):
-        for target in (self.get_item_by_name(item_name), self._server_item(item_name)):
+    def _set(self, item, **changes):
+        # Like anylist.List, takes an item or a name (which picks the first item with it)
+        identifier = item.identifier if isinstance(item, FakeAnyListItem) else self.get_item_by_name(item).identifier
+        for target in (self.get_item_by_id(identifier), self.server[identifier]):
             for key, value in changes.items():
                 setattr(target, key, value)
 
     def _server_item(self, name):
         return next(i for i in self.server.values() if i.name == name)
 
-    def check_item(self, name):
-        self._set(name, checked=True)
+    def check_item(self, item):
+        self._set(item, checked=True)
 
-    def add_or_uncheck_item(self, name):
-        if self.get_item_by_name(name) is None:
-            item = FakeAnyListItem(name)
-            self.server[item.identifier] = item
-            self.items.append(copy.copy(item))
-        else:
-            self._set(name, checked=False)
+    def uncheck_item(self, item):
+        self._set(item, checked=False)
+
+    def add_item(self, name):
+        item = FakeAnyListItem(name)
+        self.server[item.identifier] = item
+        self.items.append(copy.copy(item))
 
     # Changes made by the user in the AnyList app
     def user_add(self, name):
@@ -202,9 +204,9 @@ class SyncTestCase(unittest.TestCase):
                             credential_cache="alexa-credentials.json", session=session)
         self.api.login()
 
-    def start(self, anylist):
+    def start(self, anylist, journal_file=None):
         self.anylist = anylist
-        self.syncer = Synchronizer(anylist, AlexaShoppingList(self.api))
+        self.syncer = Synchronizer(anylist, AlexaShoppingList(self.api), journal_file=journal_file)
         self.alexa.writes.clear()
         return self.syncer
 
@@ -366,6 +368,81 @@ class AnyListChangesTest(SyncTestCase):
         self.syncer.sync()
 
         self.assert_in_sync(["Milk", "Bread", "Iced Coffee"])
+
+
+class AlexaAddsExistingItemTest(SyncTestCase):
+    """Items said to Alexa should reuse what AnyList already has, keeping its category."""
+
+    def setUp(self):
+        super().setUp()
+        self.alexa.add("Leche")
+        self.start(FakeAnyListList.with_items("Leche", ("Plátanos", True), ("Pan De Molde", True)))
+        self.original_ids = set(self.anylist.server)
+
+    def assert_no_new_anylist_items(self):
+        self.assertEqual(set(self.anylist.server), self.original_ids)
+
+    def test_accents_and_case_dont_matter(self):
+        self.alexa.add("platanos")
+
+        self.syncer.sync()
+
+        self.assert_in_sync(["Leche", "Plátanos"])
+        self.assert_no_new_anylist_items()
+
+    def test_extra_spaces_dont_matter(self):
+        self.alexa.add("pan  de molde ")
+
+        self.syncer.sync()
+
+        self.assert_in_sync(["Leche", "Pan De Molde"])
+        self.assert_no_new_anylist_items()
+
+    def test_item_already_active_is_not_duplicated_on_alexa(self):
+        self.alexa.add("leche")
+
+        self.syncer.sync()
+
+        self.assertEqual(self.alexa.active, ["Leche"])
+        self.assert_in_sync(["Leche"])
+        self.assert_no_new_anylist_items()
+
+    def test_new_item_is_created_with_each_word_capitalized(self):
+        self.alexa.add("yogur griego")
+
+        self.syncer.sync()
+
+        self.assert_in_sync(["Leche", "Yogur Griego"])
+        self.assertEqual(len(self.anylist.server), len(self.original_ids) + 1)
+
+    def test_prefers_active_copy_when_names_collide(self):
+        server = FakeAnyListList.with_items(("Tomates", True), "Tomates").server
+        self.alexa.delete("Leche")
+        self.alexa.add("Tomates")
+        self.start(FakeAnyListList(server))
+
+        self.alexa.delete("Tomates")
+        self.syncer.sync()
+
+        self.assertEqual(self.anylist.unchecked, [])
+        self.assertEqual(self.anylist.checked, ["Tomates", "Tomates"])
+
+    def test_replaying_journal_after_crash_finishes_the_job(self):
+        self.start(self.anylist.refresh(), journal_file="journal.json")
+        self.alexa.add("platanos")
+
+        # Die after renaming the item on Alexa but before unchecking it in AnyList
+        with patch.object(FakeAnyListList, "uncheck_item", side_effect=RuntimeError("crash")):
+            with self.assertRaises(RuntimeError):
+                self.syncer.sync()
+        self.assertIn("Plátanos", self.alexa.active)
+        self.assertNotIn("Plátanos", self.anylist.unchecked)
+
+        # server.py starts over with a new Synchronizer, which replays the journal
+        self.start(self.anylist.refresh(), journal_file="journal.json")
+
+        self.assert_in_sync(["Leche", "Plátanos"])
+        self.assert_no_new_anylist_items()
 
 
 class FailureTest(SyncTestCase):
