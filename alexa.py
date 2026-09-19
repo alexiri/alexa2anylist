@@ -8,6 +8,14 @@ from playwright.sync_api import TimeoutError as PWTimeoutError
 import logging
 
 WAIT_TIMEOUT = 30000  # milliseconds
+# Login page locators. Each lists every known variant of the field; Amazon's
+# email field, for example, is now type="text" (email or phone number).
+EMAIL_FIELD = '#ap_email_login, #ap_email, input[name="email"], input[type="email"]'
+PASSWORD_FIELD = '#ap_password, input[name="password"], input[type="password"]'
+SIGNIN_SUBMIT = '#signInSubmit, form[name="signIn"] input[type="submit"]'
+MFA_FIELD = '#auth-mfa-otpcode, input[name="otpCode"]'
+MFA_REMEMBER = '#auth-mfa-remember-device, input[name="rememberDevice"]'
+MFA_SUBMIT = '#auth-signin-button, input[name="mfaSubmit"]'
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +105,7 @@ class AlexaShoppingList:
     def _driver_is_on_login_email_page(self):
         if "ap/signin" not in self._page.url:
             return False
-        if self._page.locator('input[type="email"]').count() == 0:
+        if self._page.locator(EMAIL_FIELD).count() == 0:
             print(" -> No email field found")
             self.get_screenshot("no_email_field")
             return False
@@ -105,12 +113,13 @@ class AlexaShoppingList:
         return True
 
     def _handle_login_email_page(self):
-        self._page.fill('input[type="email"]', self.email)
-        self._page.press('input[type="email"]', "Enter")
+        email_field = self._page.locator(EMAIL_FIELD).first
+        email_field.fill(self.email)
+        email_field.press("Enter")
         self._page.wait_for_load_state("domcontentloaded")
 
     def _driver_is_on_login_password_page(self):
-        if self._page.locator('input[type="password"]').count() == 0:
+        if self._page.locator(PASSWORD_FIELD).count() == 0:
             print(" -> No password field found")
             self.get_screenshot("no_password_field")
             return False
@@ -118,129 +127,28 @@ class AlexaShoppingList:
         return True
 
     def _handle_login_password_page(self):
-        print(" -> Password page detected")
-        pw_field = self._page.locator('#ap_password')
-        if pw_field.count() == 0:
-            pw_field = self._page.locator('input[type="password"]')
-        pw_field.wait_for(state="visible", timeout=15000)
-
-        # Amazon can move focus for passkey/WebAuthn flows, so always target the
-        # field directly and verify the value before submitting.
-        pw_field.fill("")
-
-        def _password_len():
-            return len(pw_field.input_value() or "")
-
+        pw_field = self._page.locator(PASSWORD_FIELD).first
         pw_field.fill(self.password)
-        val_len = _password_len()
-        if val_len == 0:
+        if not pw_field.input_value():
+            # Amazon can move focus for passkey/WebAuthn flows; type it instead
             pw_field.click()
             pw_field.type(self.password, delay=40)
-            val_len = _password_len()
-        if val_len == 0:
-            pw_field.evaluate(
-                """(el, value) => {
-                    el.focus();
-                    el.value = value;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }""",
-                self.password,
-            )
-            val_len = _password_len()
-
-        print(f" -> Password length in field: {val_len}")
-        if val_len == 0:
+        if not pw_field.input_value():
             print(" -> Password could not be entered")
             self.get_screenshot("password_not_filled")
             return
 
-        def _submit_outcome_reached(timeout_ms: int = 10000):
-            self._page.wait_for_function(
-                """() => {
-                    const url = window.location.href;
-                    const body = document.body;
-                    if (!body) return false;
-                    const text = (body.innerText || '').toLowerCase();
-                    const hasPw = !!document.querySelector('input[type="password"]');
-                    const mfa = url.includes('ap/mfa') || !!document.getElementById('auth-mfa-otpcode');
-                    const nav = !!document.getElementById('nav-link-accountList') && !url.includes('ap/signin');
-                    const puzzle = text.includes('solve this puzzle');
-                    const wrongPw = (text.includes('incorrect') || text.includes('incorre')) &&
-                        (text.includes('password') || text.includes('contrase'));
-                    const cookieWarn = text.includes('please enable cookies');
-                    const visibleAlert = [
-                        'auth-error-message-box',
-                        'auth-warning-message-box',
-                        'auth-password-missing-alert',
-                        'passkey-error-alert',
-                        'auth-cookie-warning-message',
-                    ].some((id) => {
-                        const el = document.getElementById(id);
-                        if (!el) return false;
-                        const style = window.getComputedStyle(el);
-                        const hiddenByClass = el.classList.contains('aok-hidden');
-                        return !hiddenByClass && style.display !== 'none' && style.visibility !== 'hidden';
-                    });
-                    return mfa || nav || puzzle || wrongPw || cookieWarn || visibleAlert || !hasPw;
-                }""",
-                timeout=timeout_ms,
-            )
-
-        def _attempt_submit(action_name: str, action):
-            print(f" -> Submitting password via {action_name}")
-            saw_post = False
-            try:
-                with self._page.expect_response(
-                    lambda r: "/ap/signin" in r.url and r.request.method == "POST",
-                    timeout=6000,
-                ):
-                    action()
-                saw_post = True
-                print(" -> Sign-in POST request detected")
-            except PWTimeoutError:
-                print(" -> No sign-in POST detected")
-
-            try:
-                _submit_outcome_reached(10000)
-                return True
-            except PWTimeoutError:
-                if saw_post:
-                    print(" -> POST detected but still no terminal state")
-                return False
-
-        submitted = _attempt_submit("Enter key", lambda: pw_field.press("Enter"))
-
-        if not submitted:
-            submit = self._page.locator('#signInSubmit')
-            if submit.count() == 0:
-                submit = self._page.locator('input[type="submit"]').first
-            if submit.count() > 0:
-                submitted = _attempt_submit("button click", lambda: submit.click())
-
-        if not submitted:
-            submitted = _attempt_submit(
-                "form requestSubmit",
-                lambda: self._page.evaluate(
-                    """() => {
-                        const form = document.querySelector('form[name="signIn"]');
-                        const btn = document.getElementById('signInSubmit');
-                        if (form && form.requestSubmit) {
-                            form.requestSubmit(btn || undefined);
-                            return;
-                        }
-                        if (btn) {
-                            btn.click();
-                            return;
-                        }
-                        if (form) {
-                            form.submit();
-                        }
-                    }"""
-                ),
-            )
-
-        if not submitted:
+        # Amazon's passkey handling swallows Enter and button clicks, so submit
+        # the form directly first and keep the others as fallbacks.
+        submit_methods = [
+            ("form requestSubmit", lambda: pw_field.evaluate("el => el.form.requestSubmit()")),
+            ("Enter key", lambda: pw_field.press("Enter")),
+            ("button click", lambda: self._page.locator(SIGNIN_SUBMIT).first.click()),
+        ]
+        for name, action in submit_methods:
+            if self._submit_password(name, action):
+                break
+        else:
             print(" -> No state change after submit")
             self.get_screenshot("password_submit_failed")
             return
@@ -278,6 +186,56 @@ class AlexaShoppingList:
 
         print(" -> Password submission flow appears complete")
 
+    def _submit_password(self, name, action):
+        print(f" -> Submitting password via {name}")
+        try:
+            with self._page.expect_response(
+                lambda r: "/ap/signin" in r.url and r.request.method == "POST",
+                timeout=6000,
+            ):
+                action()
+            print(" -> Sign-in POST request detected")
+        except PWTimeoutError:
+            print(" -> No sign-in POST detected")
+            return False
+
+        try:
+            self._page.wait_for_function(
+                """(pwSelector) => {
+                    const url = window.location.href;
+                    const body = document.body;
+                    if (!body) return false;
+                    const text = (body.innerText || '').toLowerCase();
+                    const hasPw = !!document.querySelector(pwSelector);
+                    const mfa = url.includes('ap/mfa') || !!document.getElementById('auth-mfa-otpcode');
+                    const nav = !!document.getElementById('nav-link-accountList') && !url.includes('ap/signin');
+                    const puzzle = text.includes('solve this puzzle');
+                    const wrongPw = (text.includes('incorrect') || text.includes('incorre')) &&
+                        (text.includes('password') || text.includes('contrase'));
+                    const cookieWarn = text.includes('please enable cookies');
+                    const visibleAlert = [
+                        'auth-error-message-box',
+                        'auth-warning-message-box',
+                        'auth-password-missing-alert',
+                        'passkey-error-alert',
+                        'auth-cookie-warning-message',
+                    ].some((id) => {
+                        const el = document.getElementById(id);
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const hiddenByClass = el.classList.contains('aok-hidden');
+                        return !hiddenByClass && style.display !== 'none' && style.visibility !== 'hidden';
+                    });
+                    return mfa || nav || puzzle || wrongPw || cookieWarn || visibleAlert || !hasPw;
+                }""",
+                arg=PASSWORD_FIELD,
+                timeout=10000,
+            )
+            return True
+        except PWTimeoutError:
+            print(" -> POST detected but still no terminal state")
+            return False
+
     def login_requires_puzzle(self):
         return self._page.locator("text=Solve this puzzle to protect your account").count() > 0
 
@@ -304,11 +262,11 @@ class AlexaShoppingList:
             code_str = code_str.zfill(6)
 
         print(f" -> Submitting MFA code: {code_str}")
-        self._page.fill("#auth-mfa-otpcode", code_str)
-        remember = self._page.locator("#auth-mfa-remember-device")
+        self._page.locator(MFA_FIELD).first.fill(code_str)
+        remember = self._page.locator(MFA_REMEMBER)
         if remember.count() > 0:
-            remember.click()
-        self._page.locator('input[type="submit"]').click()
+            remember.first.check()
+        self._page.locator(MFA_SUBMIT).first.click()
         time.sleep(5)
         if not self.login_requires_mfa():
             self._login_successful()
@@ -334,7 +292,7 @@ class AlexaShoppingList:
             self._login_successful()
             return
 
-        self._page.wait_for_selector('input[type="email"]', timeout=WAIT_TIMEOUT)
+        self._page.wait_for_selector(EMAIL_FIELD, timeout=WAIT_TIMEOUT)
 
         self.email = email
         self.password = password
