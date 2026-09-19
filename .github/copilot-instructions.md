@@ -13,7 +13,7 @@
 
 ## Architecture
 - `server.py` orchestrates startup, login, retry, and cleanup.
-- `alexa.py` handles Selenium-based Amazon automation and cookie persistence.
+- `alexa_api.py` handles the Alexa shopping list API: login as a virtual Alexa device, refresh-token/cookie persistence, and the `AlexaShoppingList` adapter the synchronizer uses.
 - `anylist.py` handles the AnyList API and websocket updates.
 - `synchronizer.py` contains journal-based transaction recovery and sync logic.
 - Keep the journal/recovery flow intact; it is load-bearing.
@@ -21,11 +21,10 @@
 ## Build and Test
 - Preferred runtime is the Docker/Podman image built from the `Dockerfile`.
 - Build with `podman build . -t alexa2anylist` or the equivalent Docker command.
-- Run with the `config/` directory mounted as `CONFIG_PATH`, and mount `/out` for Selenium screenshots and HTML dumps.
+- Run with the `config/` directory mounted as `CONFIG_PATH`.
 - Use `python -m unittest discover -s tests -v` for local test runs when working on code that has stubbed dependencies.
 
 ## Conventions
 - Use `CONFIG_PATH` for config files and credential caches.
-- Keep Alexa session cookies and AnyList token cache behavior working across restarts.
-- When debugging Selenium failures, save screenshots and DOM snapshots to `/out`.
+- Keep the Alexa credential cache (`alexa-credentials.json`) and AnyList token cache working across restarts; password logins to either service are throttled to avoid getting blocked.
 - Preserve the existing retry loop and websocket reconnection behavior; transient failures should not terminate the whole service.

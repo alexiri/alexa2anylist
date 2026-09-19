@@ -1,4 +1,3 @@
-cloakbrowser
 websockets==17.1
 requests
 websocket-client

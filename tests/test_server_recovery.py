@@ -32,29 +32,25 @@ class FakeAnyList:
         FakeAnyList.teardown_calls += 1
 
 
-class FakeAlexa:
-    instances = 0
-    login_calls = []
-    clear_calls = 0
+class FakeAlexaAPI:
+    instances = []
+    login_calls = 0
+    fail_first_login = False
 
     def __init__(self, *args, **kwargs):
-        FakeAlexa.instances += 1
+        FakeAlexaAPI.instances.append(self)
         self.args = args
         self.kwargs = kwargs
-        self.is_authenticated = False
 
-    def login(self, email, password, mfa_secret=None):
-        FakeAlexa.login_calls.append((email, password, mfa_secret))
-        self.is_authenticated = True
+    def login(self):
+        FakeAlexaAPI.login_calls += 1
+        if FakeAlexaAPI.fail_first_login and FakeAlexaAPI.login_calls == 1:
+            raise RuntimeError("Amazon temporarily unavailable")
 
-    def login_requires_mfa(self):
-        return False
 
-    def submit_mfa(self, code):
-        self.is_authenticated = True
-
-    def _clear_driver(self):
-        FakeAlexa.clear_calls += 1
+class FakeAlexaShoppingList:
+    def __init__(self, api):
+        self.api = api
 
 
 class FakeSynchronizer:
@@ -64,6 +60,7 @@ class FakeSynchronizer:
 
     def __init__(self, anylist, alexa, journal_file=None):
         FakeSynchronizer.instances += 1
+        FakeSynchronizer.last = self
         self.anylist = anylist
         self.alexa = alexa
         self.journal_file = journal_file
@@ -78,25 +75,26 @@ class ServerRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.original_modules = {
             module_name: sys.modules.get(module_name)
-            for module_name in ("anylist", "alexa", "synchronizer", "server")
+            for module_name in ("anylist", "alexa_api", "synchronizer", "server")
         }
-        for module_name in ("anylist", "alexa", "synchronizer", "server"):
+        for module_name in ("anylist", "alexa_api", "synchronizer", "server"):
             sys.modules.pop(module_name, None)
 
         fake_anylist_module = types.ModuleType("anylist")
         fake_anylist_module.AnyList = FakeAnyList
         sys.modules["anylist"] = fake_anylist_module
 
-        fake_alexa_module = types.ModuleType("alexa")
-        fake_alexa_module.AlexaShoppingList = FakeAlexa
-        sys.modules["alexa"] = fake_alexa_module
+        fake_alexa_module = types.ModuleType("alexa_api")
+        fake_alexa_module.AlexaAPI = FakeAlexaAPI
+        fake_alexa_module.AlexaShoppingList = FakeAlexaShoppingList
+        sys.modules["alexa_api"] = fake_alexa_module
 
         fake_sync_module = types.ModuleType("synchronizer")
         fake_sync_module.Synchronizer = FakeSynchronizer
         sys.modules["synchronizer"] = fake_sync_module
 
         self.server = importlib.import_module("server")
-        self.server.config = {
+        test_config = {
             "amazon_url": "amazon.co.uk",
             "amazon_username": "user@example.com",
             "amazon_password": "secret-password",
@@ -105,13 +103,15 @@ class ServerRecoveryTests(unittest.TestCase):
             "anylist_password": "anylist-password",
             "anylist_list_name": "Groceries",
         }
+        # main() reloads the config from disk
+        self.server._load_config = lambda: dict(test_config)
 
         FakeAnyList.instances = 0
         FakeAnyList.teardown_calls = 0
         FakeAnyList.login_calls = 0
-        FakeAlexa.instances = 0
-        FakeAlexa.login_calls = []
-        FakeAlexa.clear_calls = 0
+        FakeAlexaAPI.instances = []
+        FakeAlexaAPI.login_calls = 0
+        FakeAlexaAPI.fail_first_login = False
         FakeSynchronizer.instances = 0
         FakeSynchronizer.sync_calls = 0
         FakeSynchronizer.fail_first_sync = True
@@ -133,7 +133,7 @@ class ServerRecoveryTests(unittest.TestCase):
         self.server.main(max_cycles=2, retry_delay=0, sync_delay=0)
 
         self.assertGreaterEqual(FakeSynchronizer.instances, 2, "expected a fresh synchronizer after recovery")
-        self.assertGreaterEqual(FakeAlexa.instances, 2, "expected Alexa client recreation after recovery")
+        self.assertGreaterEqual(len(FakeAlexaAPI.instances), 2, "expected Alexa client recreation after recovery")
         self.assertIn(0, sleep_calls)
 
     def test_main_retries_after_anylist_login_exception(self):
@@ -156,6 +156,29 @@ class ServerRecoveryTests(unittest.TestCase):
         self.assertEqual(FakeAnyList.login_calls, 2)
         self.assertEqual(FakeSynchronizer.sync_calls, 1)
         self.assertIn(0, sleep_calls)
+
+    def test_alexa_client_gets_config_and_credential_cache(self):
+        FakeSynchronizer.fail_first_sync = False
+
+        self.server.main(max_cycles=1, retry_delay=0, sync_delay=0)
+
+        alexa = FakeAlexaAPI.instances[0]
+        self.assertEqual(alexa.args, ("amazon.co.uk", "user@example.com", "secret-password", "mfa-secret"))
+        self.assertEqual(alexa.kwargs, {"credential_cache": "alexa-credentials.json"})
+        self.assertIs(FakeSynchronizer.last.alexa.api, alexa)
+
+    def test_main_retries_after_alexa_login_exception(self):
+        self.server.sleep = lambda seconds: None
+        FakeAlexaAPI.fail_first_login = True
+        FakeSynchronizer.fail_first_sync = False
+
+        self.server.main(max_cycles=2, retry_delay=0, sync_delay=0)
+
+        self.assertEqual(FakeAlexaAPI.login_calls, 2)
+        self.assertEqual(FakeSynchronizer.sync_calls, 1)
+        # The AnyList session from the failed attempt was closed, not leaked
+        self.assertEqual(FakeAnyList.instances, 2)
+        self.assertEqual(FakeAnyList.teardown_calls, 2)
 
 
 if __name__ == "__main__":
