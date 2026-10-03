@@ -1,4 +1,4 @@
-websockets==17.1
+websockets==17.2
 requests
 websocket-client
 protobuf
