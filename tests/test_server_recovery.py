@@ -157,6 +157,30 @@ class ServerRecoveryTests(unittest.TestCase):
         self.assertEqual(FakeSynchronizer.sync_calls, 1)
         self.assertIn(0, sleep_calls)
 
+    def test_main_honors_rate_limit_retry_after(self):
+        sleep_calls = []
+
+        class RateLimitError(Exception):
+            retry_after = 1890
+
+        original_login = FakeAnyList.login
+
+        def failing_first_login(self):
+            FakeAnyList.login_calls += 1
+            if FakeAnyList.login_calls == 1:
+                raise RateLimitError("AnyList rate limited requests")
+
+        self.server.sleep = lambda seconds: sleep_calls.append(seconds)
+        FakeAnyList.login = failing_first_login
+        FakeSynchronizer.fail_first_sync = False
+        try:
+            self.server.main(max_cycles=2, retry_delay=30, sync_delay=0)
+        finally:
+            FakeAnyList.login = original_login
+
+        self.assertEqual(FakeAnyList.login_calls, 2)
+        self.assertIn(1890, sleep_calls)
+
     def test_alexa_client_gets_config_and_credential_cache(self):
         FakeSynchronizer.fail_first_sync = False
 

@@ -14,6 +14,7 @@ install_runtime_stubs()
 
 import anylist as anylist_module
 from anylist import AnyList
+from anylist import AnyListRateLimitError
 from anylist import Item
 from anylist import List
 from synchronizer import Synchronizer
@@ -239,6 +240,31 @@ class AnyListAuthRetryTests(unittest.TestCase):
         self.assertEqual(refresh_call.kwargs["data"]["refresh_token"], "refresh-token")
         self.assertEqual(retry_call.kwargs["headers"]["Authorization"], "Bearer fresh-token")
 
+    @patch("anylist.time.sleep", return_value=None)
+    @patch("anylist.requests.post")
+    def test_post_propagates_rate_limit_after_token_refresh(self, mock_post, _mock_sleep):
+        api = AnyList("user@example.com", "password")
+        api.access_token = "stale-token"
+        api.refresh_token = "refresh-token"
+        mock_post.side_effect = [
+            _Response(status_code=401, text="unauthorized"),
+            _Response(
+                status_code=200,
+                json_data={"access_token": "fresh-token", "refresh_token": "fresh-refresh-token"},
+            ),
+            _Response(
+                status_code=429,
+                text='{"error": "sync_rate_limited", "retry_after": 1890}',
+                json_data={"error": "sync_rate_limited", "retry_after": 1890},
+            ),
+        ]
+
+        with self.assertRaises(AnyListRateLimitError) as raised:
+            api._post("/data/user-data/get")
+
+        self.assertEqual(raised.exception.retry_after, 1890)
+        self.assertEqual(mock_post.call_count, 3)
+
     @patch("anylist.requests.post")
     def test_post_does_not_refresh_tokens_after_server_error(self, mock_post):
         mock_post.return_value = _Response(status_code=503)
@@ -249,6 +275,21 @@ class AnyListAuthRetryTests(unittest.TestCase):
             api._post("/data/user-data/get")
 
         api._refresh_tokens.assert_not_called()
+        self.assertEqual(mock_post.call_count, 1)
+
+    @patch("anylist.requests.post")
+    def test_post_propagates_anylist_rate_limit_delay(self, mock_post):
+        mock_post.return_value = _Response(
+            status_code=429,
+            text='{"error": "sync_rate_limited", "retry_after": 1890}',
+            json_data={"error": "sync_rate_limited", "retry_after": 1890},
+        )
+        api = AnyList("user@example.com", "password")
+
+        with self.assertRaises(AnyListRateLimitError) as raised:
+            api._post("/data/user-data/get")
+
+        self.assertEqual(raised.exception.retry_after, 1890)
         self.assertEqual(mock_post.call_count, 1)
 
     def test_list_refresh_forces_remote_reload(self):

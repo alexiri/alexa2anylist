@@ -107,7 +107,12 @@ def main(max_cycles=None, retry_delay=30, sync_delay=60):
                 anylist.teardown()
             anylist = None
             syncer = None
-            sleep(retry_delay)
+            delay = getattr(e, 'retry_after', retry_delay)
+            if isinstance(delay, (int, float)) and delay > 0:
+                logger.warning("Waiting %ss before retrying", delay)
+                sleep(delay)
+            else:
+                sleep(retry_delay+1)
 
     if anylist is not None:
         anylist.teardown()

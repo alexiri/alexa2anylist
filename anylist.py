@@ -16,6 +16,13 @@ logging.basicConfig(
 # logger = logging.getLogger('__name__')
 # logger.setLevel(logging.DEBUG)
 
+
+class AnyListRateLimitError(Exception):
+    def __init__(self, retry_after):
+        super().__init__(f"AnyList rate limited requests; retry after {retry_after}s")
+        self.retry_after = retry_after
+
+
 class AnyList:
     CREDENTIALS_KEY_CLIENT_ID = 'clientId'
     CREDENTIALS_KEY_ACCESS_TOKEN = 'accessToken'
@@ -77,6 +84,16 @@ class AnyList:
             diagnostic_headers,
             self._sanitize_response_text(response_text),
         )
+
+    def _rate_limit_error(self, response):
+        try:
+            retry_after = int(response.json()['retry_after'])
+        except (KeyError, TypeError, ValueError, requests.JSONDecodeError):
+            return None
+
+        if retry_after > 0:
+            return AnyListRateLimitError(retry_after)
+        return None
 
     def _write_private_json(self, file_path, payload):
         fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -376,6 +393,10 @@ class AnyList:
         response = _request()
         if response.status_code != 200:
             self._log_failed_response(f"AnyList API request {path}", response)
+            if response.status_code == 429:
+                rate_limit_error = self._rate_limit_error(response)
+                if rate_limit_error is not None:
+                    raise rate_limit_error
             if response.status_code not in (401, 403):
                 raise Exception(f"Failed to send request: status={response.status_code}")
 
@@ -385,6 +406,10 @@ class AnyList:
             response = _request()
             if response.status_code != 200:
                 self._log_failed_response(f"AnyList API request retry {path}", response)
+                if response.status_code == 429:
+                    rate_limit_error = self._rate_limit_error(response)
+                    if rate_limit_error is not None:
+                        raise rate_limit_error
                 raise Exception(
                     "Failed to send request: "
                     f"status={response.status_code} "
