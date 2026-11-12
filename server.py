@@ -75,7 +75,7 @@ def _create_syncer():
     return anylist, syncer
 
 
-def main(max_cycles=None, retry_delay=10, sync_delay=10):
+def main(max_cycles=None, retry_delay=30, sync_delay=60):
     global config
     config = _load_config()
 
